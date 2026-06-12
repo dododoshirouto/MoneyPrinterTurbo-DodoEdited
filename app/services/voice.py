@@ -139,6 +139,44 @@ def get_mimo_voices() -> list[str]:
     return [f"mimo:{voice}-{gender}" for voice, gender in voices_with_gender]
 
 
+def get_voicevox_voices(tts_type: str = "voicevox") -> list[str]:
+    """
+    VOICEVOX / AivisSpeech の /speakers エンドポイントから话者リストを取得します。
+    """
+    base_url = config.app.get(f"{tts_type}_base_url", "http://127.0.0.1:50021" if tts_type == "voicevox" else "http://127.0.0.1:10101")
+    base_url = base_url.strip().rstrip("/")
+    base_url = utils.check_and_replace_localhost(base_url)
+    url = f"{base_url}/speakers"
+    
+    try:
+        response = requests.get(url, timeout=3)
+        if response.status_code == 200:
+            speakers = response.json()
+            voices = []
+            for speaker in speakers:
+                name = speaker.get("name")
+                for style in speaker.get("styles", []):
+                    style_name = style.get("name")
+                    style_id = style.get("id")
+                    voices.append(f"{tts_type}:{style_id}:{name}-{style_name}")
+            voices.sort()
+            return voices
+    except Exception as e:
+        logger.warning(f"failed to fetch {tts_type} speakers: {e}")
+        
+    if tts_type == "voicevox":
+        return [
+            "voicevox:2:四国めたん-ノーマル",
+            "voicevox:3:ずんだもん-ノーマル",
+            "voicevox:8:春日部つむぎ-ノーマル",
+            "voicevox:10:雨晴はう-ノーマル",
+        ]
+    else:
+        return [
+            "aivisspeech:0:デフォルト-ノーマル"
+        ]
+
+
 _AZURE_VOICES_DATA_FILE = os.path.join(
     os.path.dirname(__file__), "data", "azure_voices.json"
 )
@@ -198,6 +236,14 @@ def is_gemini_voice(voice_name: str):
 def is_mimo_voice(voice_name: str):
     """检查是否是 Xiaomi MiMo TTS 的声音"""
     return voice_name.startswith("mimo:")
+
+
+def is_voicevox_voice(voice_name: str):
+    return voice_name.startswith("voicevox:")
+
+
+def is_aivisspeech_voice(voice_name: str):
+    return voice_name.startswith("aivisspeech:")
 
 
 def is_no_voice(voice_name: str | None) -> bool:
@@ -305,6 +351,9 @@ def tts(
     voice_file: str,
     voice_volume: float = 1.0,
 ) -> Union[SubMaker, None]:
+    # 音声合成用のテキストから強調タグを削除する
+    text = re.sub(r'</?color[1-3]>', '', text)
+
     if is_no_voice(voice_name):
         duration_seconds = estimate_no_voice_duration(text)
         if not generate_silent_audio(duration_seconds, voice_file):
@@ -360,6 +409,10 @@ def tts(
         else:
             logger.error(f"Invalid mimo voice name format: {voice_name}")
             return None
+    elif is_voicevox_voice(voice_name):
+        return voicevox_tts(text, voice_name, voice_rate, voice_file, voice_volume, "voicevox")
+    elif is_aivisspeech_voice(voice_name):
+        return voicevox_tts(text, voice_name, voice_rate, voice_file, voice_volume, "aivisspeech")
     return azure_tts_v1(text, voice_name, voice_rate, voice_file)
 
 
@@ -922,6 +975,114 @@ def azure_tts_v2(text: str, voice_name: str, voice_file: str) -> Union[SubMaker,
     return None
 
 
+def voicevox_tts(
+    text: str,
+    voice_name: str,
+    voice_rate: float,
+    voice_file: str,
+    voice_volume: float = 1.0,
+    tts_type: str = "voicevox"
+) -> Union[SubMaker, None]:
+    """
+    VOICEVOX または AivisSpeech APIを使って音声ファイルを生成します。
+    """
+    text = text.strip()
+    parts = voice_name.split(":")
+    if len(parts) < 2:
+        logger.error(f"Invalid voice_name format: {voice_name}")
+        return None
+    
+    try:
+        speaker_id = int(parts[1])
+    except ValueError:
+        logger.error(f"Invalid speaker_id in voice_name: {voice_name}")
+        return None
+    
+    base_url = config.app.get(f"{tts_type}_base_url", "http://127.0.0.1:50021" if tts_type == "voicevox" else "http://127.0.0.1:10101")
+    base_url = base_url.strip().rstrip("/")
+    base_url = utils.check_and_replace_localhost(base_url)
+    
+    query_url = f"{base_url}/audio_query"
+    params = {
+        "text": text,
+        "speaker": speaker_id
+    }
+    
+    try:
+        logger.info(f"start {tts_type} tts audio_query, speaker: {speaker_id}")
+        response = requests.post(query_url, params=params, timeout=30)
+        response.raise_for_status()
+        query_data = response.json()
+    except Exception as e:
+        logger.error(f"failed to create {tts_type} audio query: {e}")
+        return None
+        
+    query_data["speedScale"] = voice_rate
+    query_data["volumeScale"] = voice_volume
+    
+    synthesis_url = f"{base_url}/synthesis"
+    headers = {"Content-Type": "application/json"}
+    wav_file = voice_file.replace(".mp3", ".wav")
+    
+    try:
+        logger.info(f"start {tts_type} tts synthesis, speaker: {speaker_id}")
+        response = requests.post(synthesis_url, params={"speaker": speaker_id}, json=query_data, headers=headers, timeout=60)
+        response.raise_for_status()
+        
+        ensure_file_path_exists(wav_file)
+        with open(wav_file, "wb") as f:
+            f.write(response.content)
+    except Exception as e:
+        logger.error(f"failed to synthesize {tts_type} voice: {e}")
+        if os.path.exists(wav_file):
+            os.remove(wav_file)
+        return None
+        
+    ffmpeg_binary = utils.get_ffmpeg_binary()
+    command = [
+        ffmpeg_binary,
+        "-y",
+        "-i",
+        wav_file,
+        "-codec:a",
+        "libmp3lame",
+        "-q:a",
+        "4",
+        voice_file
+    ]
+    
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        if os.path.exists(wav_file):
+            os.remove(wav_file)
+            
+        if result.returncode != 0:
+            logger.error(f"failed to convert wav to mp3 via ffmpeg: {result.stderr}")
+            return None
+    except Exception as e:
+        logger.error(f"failed to run ffmpeg conversion: {e}")
+        if os.path.exists(wav_file):
+            os.remove(wav_file)
+        return None
+
+    sub_maker = ensure_legacy_submaker_fields(SubMaker())
+    try:
+        audio_clip = AudioFileClip(voice_file)
+        audio_duration = audio_clip.duration
+        audio_clip.close()
+        
+        populate_legacy_submaker_with_full_text(
+            sub_maker=sub_maker,
+            text=text,
+            audio_duration_seconds=audio_duration
+        )
+        logger.info(f"completed {tts_type} tts, output file: {voice_file}, duration: {audio_duration:.2f}s")
+        return sub_maker
+    except Exception as e:
+        logger.error(f"failed to populate submaker for {tts_type}: {e}")
+        return None
+
+
 def gemini_tts(
     text: str,
     voice_name: str,
@@ -1219,18 +1380,21 @@ def _match_script_line(script_lines: list[str], current_text: str, sub_index: in
         return ""
 
     target_line = script_lines[sub_index]
-    if current_text == target_line:
+    # target_line から色強調タグを除去したクリーンなテキストを作成
+    target_line_clean = re.sub(r'</?color[1-3]>', '', target_line)
+
+    if current_text == target_line_clean:
         return target_line.strip()
 
     current_text_normalized = re.sub(r"[_\W]+", "", current_text)
-    target_line_normalized = re.sub(r"[_\W]+", "", target_line)
+    target_line_normalized = re.sub(r"[_\W]+", "", target_line_clean)
     if current_text_normalized == target_line_normalized:
         return target_line.strip()
 
     # 最后一层阿拉伯语容错：edge-tts 返回的字母形态、变音符号或 Tatweel
     # 可能和脚本不同。只在常规匹配失败后归一化比较，非阿拉伯语文本不会受影响。
     current_ar = re.sub(r"[_\W]+", "", _normalize_arabic(current_text))
-    target_ar = re.sub(r"[_\W]+", "", _normalize_arabic(target_line))
+    target_ar = re.sub(r"[_\W]+", "", _normalize_arabic(target_line_clean))
     if current_ar and current_ar == target_ar:
         return target_line.strip()
 

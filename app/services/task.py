@@ -240,6 +240,8 @@ def generate_final_videos(
             video_transition_mode=video_transition_mode,
             max_clip_duration=params.video_clip_duration,
             threads=params.n_threads,
+            video_clip_fit=getattr(params, "video_clip_fit", "contain"),
+            video_margin_ratio=getattr(params, "video_margin_ratio", 0.0),
         )
 
         _progress += 50 / params.video_count / 2

@@ -3,6 +3,7 @@ import itertools
 import io
 import os
 import random
+import re
 import gc
 import shutil
 import subprocess
@@ -20,6 +21,7 @@ from moviepy import (
     TextClip,
     VideoFileClip,
     afx,
+    vfx,
 )
 from moviepy.video.tools.subtitles import SubtitlesClip
 from PIL import Image, ImageDraw, ImageFont
@@ -506,6 +508,8 @@ def combine_videos(
     video_transition_mode: VideoTransitionMode = None,
     max_clip_duration: int = 5,
     threads: int = 2,
+    video_clip_fit: str = "contain",
+    video_margin_ratio: float = 0.0,
 ) -> str:
     audio_clip = AudioFileClip(audio_file)
     try:
@@ -583,25 +587,49 @@ def combine_videos(
             clip_duration = clip.duration
             # Not all videos are same size, so we need to resize them
             clip_w, clip_h = clip.size
-            if clip_w != video_width or clip_h != video_height:
-                clip_ratio = clip.w / clip.h
-                video_ratio = video_width / video_height
-                logger.debug(f"resizing clip, source: {clip_w}x{clip_h}, ratio: {clip_ratio:.2f}, target: {video_width}x{video_height}, ratio: {video_ratio:.2f}")
+            
+            target_w = video_width
+            target_h = video_height
+            if video_clip_fit == "cover" and video_margin_ratio > 0.0:
+                target_h = int(video_height * (1.0 - 2 * video_margin_ratio))
                 
-                if clip_ratio == video_ratio:
+            if clip_w != video_width or clip_h != video_height or video_margin_ratio > 0.0:
+                clip_ratio = clip.w / clip.h
+                target_ratio = target_w / target_h
+                logger.debug(f"resizing clip ({video_clip_fit}), source: {clip_w}x{clip_h}, ratio: {clip_ratio:.2f}, target: {target_w}x{target_h}, ratio: {target_ratio:.2f}")
+                
+                if clip_ratio == target_ratio and video_margin_ratio == 0.0:
                     clip = clip.resized(new_size=(video_width, video_height))
                 else:
-                    if clip_ratio > video_ratio:
-                        scale_factor = video_width / clip_w
-                    else:
-                        scale_factor = video_height / clip_h
+                    if video_clip_fit == "cover":
+                        if clip_ratio > target_ratio:
+                            scale_factor = target_h / clip_h
+                        else:
+                            scale_factor = target_w / clip_w
+                        
+                        new_width = int(clip_w * scale_factor)
+                        new_height = int(clip_h * scale_factor)
+                        clip_resized = clip.resized(new_size=(new_width, new_height))
+                        
+                        # crop the center region
+                        x_center = new_width / 2
+                        y_center = new_height / 2
+                        clip_cropped = clip_resized.cropped(width=target_w, height=target_h, x_center=x_center, y_center=y_center)
+                        
+                        background = ColorClip(size=(video_width, video_height), color=(0, 0, 0)).with_duration(clip_duration)
+                        clip = CompositeVideoClip([background, clip_cropped.with_position("center")])
+                    else:  # contain
+                        if clip_ratio > target_ratio:
+                            scale_factor = target_w / clip_w
+                        else:
+                            scale_factor = target_h / clip_h
 
-                    new_width = int(clip_w * scale_factor)
-                    new_height = int(clip_h * scale_factor)
+                        new_width = int(clip_w * scale_factor)
+                        new_height = int(clip_h * scale_factor)
 
-                    background = ColorClip(size=(video_width, video_height), color=(0, 0, 0)).with_duration(clip_duration)
-                    clip_resized = clip.resized(new_size=(new_width, new_height)).with_position("center")
-                    clip = CompositeVideoClip([background, clip_resized])
+                        background = ColorClip(size=(video_width, video_height), color=(0, 0, 0)).with_duration(clip_duration)
+                        clip_resized = clip.resized(new_size=(new_width, new_height)).with_position("center")
+                        clip = CompositeVideoClip([background, clip_resized])
                     
             shuffle_side = random.choice(["left", "right", "top", "bottom"])
             if transition_value in (None, VideoTransitionMode.none.value):
@@ -757,10 +785,6 @@ def wrap_text(text, max_width, font="Arial", fontsize=60):
 
     line_start_punctuation = "，。！？；：、,.!?;:)]}）】》」』”’"
     for index in range(1, len(lines)):
-        # 中文长句按字符拆分时，最后一个句号、逗号等闭合标点可能被单独
-        # 放到下一行，导致字幕背景被异常撑高，视觉上像一个小点掉在正文
-        # 下方。这里在不重新设计换行算法的前提下，把上一行最后一个字
-        # 移到标点行前面，让标点跟随文字显示，兼容中英文常见闭合标点。
         if not lines[index] or lines[index][0] not in line_start_punctuation:
             continue
         if len(lines[index - 1]) <= 1:
@@ -777,73 +801,25 @@ def wrap_text(text, max_width, font="Arial", fontsize=60):
     return result, height
 
 
-def _hex_to_rgb(color: str) -> tuple[int, int, int]:
-    # 字幕背景色来自 API/WebUI 参数，可能为空或格式不规范。这里统一只接受
-    # #RRGGBB 形式，非法值回退为黑色，避免 PIL 渲染阶段抛出异常中断任务。
-    if isinstance(color, str) and color.startswith("#") and len(color) == 7:
-        try:
-            return (int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16))
-        except ValueError:
-            pass
-    return (0, 0, 0)
+def get_bg_video_file(bg_video_type: str, bg_video_file: str) -> str:
+    if bg_video_type == "custom":
+        if bg_video_file and os.path.exists(bg_video_file):
+            return bg_video_file
+        logger.warning(f"custom bg video file not found: {bg_video_file}")
+        return ""
 
+    if bg_video_type == "random":
+        bg_video_dir = utils.resource_dir("bg_videos")
+        if not os.path.exists(bg_video_dir):
+            os.makedirs(bg_video_dir)
+        suffix = "*.mp4"
+        files = glob.glob(os.path.join(bg_video_dir, suffix))
+        if not files:
+            logger.warning(f"no bg video files found in directory: {bg_video_dir}")
+            return ""
+        return random.choice(files)
 
-def _rounded_subtitle_background_clip(
-    width: int,
-    height: int,
-    color: str,
-    alpha: int = 140,
-    radius: int = 16,
-) -> ImageClip:
-    # 新字幕背景仅在用户显式开启时使用：通过 RGBA 图片绘制圆角半透明底板，
-    # 再交给 MoviePy 作为透明 ImageClip 参与合成。这样默认路径完全不变，
-    # 同时可以低成本试验更柔和的字幕视觉效果。
-    rgb = _hex_to_rgb(color)
-    safe_alpha = max(0, min(255, int(alpha)))
-    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    draw.rounded_rectangle(
-        [0, 0, max(0, width - 1), max(0, height - 1)],
-        radius=max(0, int(radius)),
-        fill=(rgb[0], rgb[1], rgb[2], safe_alpha),
-    )
-    return ImageClip(np.array(img), transparent=True)
-
-
-def _get_visible_center_position(
-    text_clip: TextClip,
-    container_width: int,
-    container_height: int,
-) -> tuple[int, int]:
-    """
-    按文字真实可见像素把 TextClip 放到背景容器中心。
-
-    MoviePy 的 TextClip 会按字体行高和 baseline 创建透明画布。很多字体的
-    可见字形并不在这个画布的几何中心，直接 `with_position("center")`
-    会把整块透明画布居中，导致字幕看起来偏上或偏下。这里读取 TextClip
-    的透明 mask，只根据实际有像素的 bbox 计算偏移，让用户看到的文字
-    在字幕背景里视觉居中。
-    """
-    x = int(round((container_width - text_clip.w) / 2))
-    y = int(round((container_height - text_clip.h) / 2))
-
-    try:
-        if text_clip.mask is None:
-            return x, y
-
-        mask_frame = text_clip.mask.get_frame(0)
-        ys, _ = np.where(mask_frame > 0.01)
-        if len(ys) == 0:
-            return x, y
-
-        visible_top = int(ys.min())
-        visible_bottom = int(ys.max())
-        visible_height = visible_bottom - visible_top + 1
-        y = int(round((container_height - visible_height) / 2 - visible_top))
-    except Exception as exc:
-        logger.debug(f"failed to center subtitle text by visible mask: {str(exc)}")
-
-    return x, y
+    return ""
 
 
 def generate_video(
@@ -862,13 +838,10 @@ def generate_video(
     logger.info(f"  ③ subtitle: {subtitle_path}")
     logger.info(f"  ④ output: {output_file}")
 
-    # https://github.com/harry0703/MoneyPrinterTurbo/issues/217
-    # PermissionError: [WinError 32] The process cannot access the file because it is being used by another process: 'final-1.mp4.tempTEMP_MPY_wvf_snd.mp3'
-    # write into the same directory as the output file
     output_dir = os.path.dirname(output_file)
 
     font_path = ""
-    if params.subtitle_enabled:
+    if params.subtitle_enabled or getattr(params, "video_title", ""):
         if not params.font_name:
             params.font_name = "STHeitiMedium.ttc"
         font_path = os.path.join(utils.font_dir(), params.font_name)
@@ -878,161 +851,229 @@ def generate_video(
         logger.info(f"  ⑤ font: {font_path}")
 
     def resolve_subtitle_background_color():
-        # 兼容历史参数：API 里 `text_background_color` 既可能是布尔值，
-        # 也可能是实际颜色字符串。统一在这里归一化，避免把 True/False
-        # 直接传给 TextClip 后出现不可预期的渲染结果。
         if isinstance(params.text_background_color, bool):
             return "#000000" if params.text_background_color else None
         return params.text_background_color
+
+    def parse_markup(text):
+        pattern = re.compile(r'<(color[1-3])>(.*?)</\1>')
+        segments = []
+        last_idx = 0
+        for match in pattern.finditer(text):
+            start, end = match.span()
+            if start > last_idx:
+                segments.append((text[last_idx:start], None))
+            tag = match.group(1)
+            content = match.group(2)
+            segments.append((content, tag))
+            last_idx = end
+        if last_idx < len(text):
+            segments.append((text[last_idx:], None))
+        return segments
+
+    def split_segments_by_lines(segments, wrapped_plain_text):
+        lines = []
+        wrapped_lines = wrapped_plain_text.split('\n')
+        seg_idx = 0
+        char_in_seg_idx = 0
+        
+        for line in wrapped_lines:
+            line_len = len(line)
+            chars_needed = line_len
+            line_segs = []
+            
+            while chars_needed > 0 and seg_idx < len(segments):
+                seg_text, style = segments[seg_idx]
+                seg_left = len(seg_text) - char_in_seg_idx
+                
+                if seg_left <= chars_needed:
+                    line_segs.append((seg_text[char_in_seg_idx:], style))
+                    chars_needed -= seg_left
+                    seg_idx += 1
+                    char_in_seg_idx = 0
+                else:
+                    line_segs.append((seg_text[char_in_seg_idx:char_in_seg_idx + chars_needed], style))
+                    char_in_seg_idx += chars_needed
+                    chars_needed = 0
+            
+            if not line_segs and line_len == 0:
+                line_segs.append(("", None))
+            lines.append(line_segs)
+        return lines
 
     def create_text_clip(subtitle_item):
         params.font_size = int(params.font_size)
         params.stroke_width = int(params.stroke_width)
         phrase = subtitle_item[1]
-        max_width = video_width * 0.9
+        
+        margin_x_ratio = getattr(params, "text_margin_x", 0.05)
+        max_width = int(video_width * (1.0 - 2 * margin_x_ratio))
+        
         bg_color = resolve_subtitle_background_color()
         rounded_bg_enabled = bool(
             getattr(params, "rounded_subtitle_background", False) and bg_color
         )
         has_subtitle_background = bool(bg_color)
+        
         pad_x = int(params.font_size * 0.6) if has_subtitle_background else 0
-        # 字幕背景需要给文字左右留出明确内边距。先从可用宽度中扣除
-        # padding 再换行，避免长英文或大字号刚好撑满 90% 视频宽度后，
-        # 文字贴到背景框边缘，看起来像被裁切。普通矩形背景和圆角背景
-        # 都走这条逻辑；无背景字幕则保持原有最大宽度。
-        text_max_width = max(1, int(max_width) - 2 * pad_x)
-        wrapped_txt, txt_height = wrap_text(
-            phrase,
+        text_max_width = max(1, max_width - 2 * pad_x)
+        
+        segments = parse_markup(phrase)
+        plain_text = "".join(text for text, _ in segments)
+        
+        wrapped_plain, txt_height = wrap_text(
+            plain_text,
             max_width=text_max_width,
             font=font_path,
             fontsize=params.font_size,
         )
+        
+        lines_segs = split_segments_by_lines(segments, wrapped_plain)
+        
         interline = int(params.font_size * 0.25)
-        line_count = wrapped_txt.count("\n") + 1
         vertical_padding = int(params.font_size * 0.35)
-        text_clip_margin_y = max(
-            int(params.font_size * 0.3), int(params.stroke_width * 2)
-        )
-        # MoviePy 在 `method=label` 下会自动收缩文本框高度，遇到多行字幕、
-        # 描边或背景色时，容易把最后一行的下半部分裁掉。这里显式传入
-        # 一个更保守的高度，把行间距和额外上下留白一并算进去，保证字幕
-        # 背景框与文字本身都能完整渲染出来。
-        clip_h = int(txt_height + vertical_padding + (interline * line_count))
-
-        if rounded_bg_enabled:
-            # 圆角背景需要贴合文字宽度，而不是沿用 90% 视频宽度。这里先用
-            # PIL 测量最长一行文字，再加水平内边距，避免短字幕出现过宽底板。
-            try:
-                font = ImageFont.truetype(font_path, params.font_size)
-                text_w = max(
-                    int(font.getbbox(line)[2] - font.getbbox(line)[0])
-                    for line in wrapped_txt.split("\n")
-                )
-            except Exception as exc:
-                logger.warning(
-                    f"failed to measure subtitle text width, fallback to max width: {str(exc)}"
-                )
-                text_w = int(max_width)
-
-            box_w = max(1, min(int(max_width), text_w + 2 * pad_x))
-            radius = max(8, int(params.font_size * 0.4))
-            text_clip = TextClip(
-                text=wrapped_txt,
-                font=font_path,
-                font_size=params.font_size,
-                color=params.text_fore_color,
-                bg_color=None,
-                stroke_color=params.stroke_color,
-                stroke_width=params.stroke_width,
-                interline=interline,
-                size=(box_w, None),
-                text_align="center",
-                margin=(0, text_clip_margin_y),
-            )
-            clip_h = max(clip_h, text_clip.h)
-            bg_clip = _rounded_subtitle_background_clip(
-                width=box_w,
-                height=clip_h,
-                color=bg_color,
-                alpha=140,
-                radius=radius,
-            )
-            text_position = _get_visible_center_position(text_clip, box_w, clip_h)
-            _clip = CompositeVideoClip(
-                [bg_clip, text_clip.with_position(text_position)],
-                size=(box_w, clip_h),
-            )
-        elif bg_color:
-            size = (
-                int(max_width),
-                clip_h,
-            )
-            text_clip = TextClip(
-                text=wrapped_txt,
-                font=font_path,
-                font_size=params.font_size,
-                color=params.text_fore_color,
-                bg_color=None,
-                stroke_color=params.stroke_color,
-                stroke_width=params.stroke_width,
-                interline=interline,
-                size=(int(max_width), None),
-                text_align="center",
-                margin=(0, text_clip_margin_y),
-            )
-            size = (size[0], max(size[1], text_clip.h))
-            bg_clip = _rounded_subtitle_background_clip(
-                width=size[0],
-                height=size[1],
-                color=bg_color,
-                alpha=255,
-                radius=0,
-            )
-            text_position = _get_visible_center_position(text_clip, size[0], size[1])
-            _clip = CompositeVideoClip(
-                [bg_clip, text_clip.with_position(text_position)],
-                size=size,
-            )
-        else:
-            size = (
-                int(max_width),
-                clip_h,
-            )
-            _clip = TextClip(
-                text=wrapped_txt,
-                font=font_path,
-                font_size=params.font_size,
-                color=params.text_fore_color,
-                bg_color=None,
-                stroke_color=params.stroke_color,
-                stroke_width=params.stroke_width,
-                interline=interline,
-                size=size,
-                text_align="center",
-            )
+        image_height = int(txt_height + 2 * vertical_padding + (interline * (len(lines_segs) - 1)))
+        if image_height <= 0:
+            image_height = params.font_size + 2 * vertical_padding
+            
+        pil_img = Image.new("RGBA", (max_width, image_height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(pil_img)
+        font = ImageFont.truetype(font_path, params.font_size)
+        
+        line_widths = []
+        for line_segs in lines_segs:
+            w = 0
+            for text, _ in line_segs:
+                w += font.getlength(text)
+            line_widths.append(w)
+            
+        if bg_color:
+            h = bg_color.lstrip('#')
+            rgb = tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+            alpha = 140 if rounded_bg_enabled else 255
+            fill_color = rgb + (alpha,)
+            
+            radius = max(8, int(params.font_size * 0.4)) if rounded_bg_enabled else 0
+            
+            for idx, (line_segs, line_w) in enumerate(zip(lines_segs, line_widths)):
+                line_x = (max_width - line_w) / 2
+                line_y = vertical_padding + idx * (params.font_size + interline)
+                
+                pad_x_bg = int(params.font_size * 0.6) if radius > 0 else int(params.font_size * 0.3)
+                pad_y_bg = int(params.font_size * 0.15)
+                
+                left = max(0, line_x - pad_x_bg)
+                top = max(0, line_y - pad_y_bg)
+                right = min(max_width, line_x + line_w + pad_x_bg)
+                bottom = min(image_height, line_y + params.font_size + pad_y_bg)
+                
+                if radius > 0:
+                    draw.rounded_rectangle([left, top, right, bottom], radius=radius, fill=fill_color)
+                else:
+                    draw.rectangle([left, top, right, bottom], fill=fill_color)
+                    
+        for idx, line_segs in enumerate(lines_segs):
+            line_w = line_widths[idx]
+            x = (max_width - line_w) / 2
+            y = vertical_padding + idx * (params.font_size + interline)
+            
+            for text, style in line_segs:
+                fore_color = params.text_fore_color or "#FFFFFF"
+                stroke_color = params.stroke_color or "#000000"
+                stroke_width = int(params.stroke_width) if params.stroke_width is not None else 1
+                
+                if getattr(params, "text_color_highlight_enabled", False) and style:
+                    if style == "color1":
+                        fore_color = getattr(params, "color1_fore", "#FF3B30")
+                        stroke_color = getattr(params, "color1_stroke", "#000000")
+                        stroke_width = int(getattr(params, "color1_stroke_width", 1.5))
+                    elif style == "color2":
+                        fore_color = getattr(params, "color2_fore", "#007AFF")
+                        stroke_color = getattr(params, "color2_stroke", "#FFFFFF")
+                        stroke_width = int(getattr(params, "color2_stroke_width", 1.5))
+                    elif style == "color3":
+                        fore_color = getattr(params, "color3_fore", "#FFCC00")
+                        stroke_color = getattr(params, "color3_stroke", "#000000")
+                        stroke_width = int(getattr(params, "color3_stroke_width", 1.5))
+                        
+                draw.text((x, y), text, font=font, fill=fore_color, stroke_width=stroke_width, stroke_fill=stroke_color)
+                x += font.getlength(text)
+                
+        img_np = np.array(pil_img)
+        _clip = ImageClip(img_np, transparent=True)
+        
         duration = subtitle_item[0][1] - subtitle_item[0][0]
         _clip = _clip.with_start(subtitle_item[0][0])
         _clip = _clip.with_end(subtitle_item[0][1])
         _clip = _clip.with_duration(duration)
+        
+        margin_y_ratio = getattr(params, "text_margin_y", 0.1)
+        
         if params.subtitle_position == "bottom":
-            _clip = _clip.with_position(("center", video_height * 0.95 - _clip.h))
+            _clip = _clip.with_position(("center", video_height * (1.0 - margin_y_ratio) - _clip.h))
         elif params.subtitle_position == "top":
-            _clip = _clip.with_position(("center", video_height * 0.05))
+            _clip = _clip.with_position(("center", video_height * margin_y_ratio))
         elif params.subtitle_position == "custom":
-            # Ensure the subtitle is fully within the screen bounds
-            margin = 10  # Additional margin, in pixels
+            margin = 10
             max_y = video_height - _clip.h - margin
             min_y = margin
             custom_y = (video_height - _clip.h) * (params.custom_position / 100)
-            custom_y = max(
-                min_y, min(custom_y, max_y)
-            )  # Constrain the y value within the valid range
+            custom_y = max(min_y, min(custom_y, max_y))
             _clip = _clip.with_position(("center", custom_y))
-        else:  # center
+        else:
             _clip = _clip.with_position(("center", "center"))
+            
         return _clip
 
     video_clip = _open_video_clip_quietly(video_path)
+    
+    # 2レイヤー背景合成処理
+    bg_video_type = getattr(params, "bg_video_type", "none")
+    bg_video_file = getattr(params, "bg_video_file", "")
+    bg_file = get_bg_video_file(bg_video_type, bg_video_file)
+    
+    if bg_file:
+        try:
+            logger.info(f"applying 2-layer background synthesis: {bg_file}")
+            bg_clip = _open_video_clip_quietly(bg_file)
+            bg_clip = bg_clip.with_effects([vfx.loop(duration=video_clip.duration)])
+            
+            bg_w, bg_h = bg_clip.size
+            if bg_w != video_width or bg_h != video_height:
+                bg_ratio = bg_w / bg_h
+                video_ratio = video_width / video_height
+                if bg_ratio > video_ratio:
+                    scale_factor = video_height / bg_h
+                else:
+                    scale_factor = video_width / bg_w
+                new_width = int(bg_w * scale_factor)
+                new_height = int(bg_h * scale_factor)
+                bg_clip = bg_clip.resized(new_size=(new_width, new_height))
+                bg_clip = bg_clip.cropped(
+                    width=video_width,
+                    height=video_height,
+                    x_center=new_width / 2,
+                    y_center=new_height / 2
+                )
+            
+            main_w, main_h = video_clip.size
+            main_ratio = main_w / main_h
+            video_ratio = video_width / video_height
+            if main_w != video_width or main_h != video_height:
+                if main_ratio > video_ratio:
+                    scale_factor = video_width / main_w
+                else:
+                    scale_factor = video_height / main_h
+                new_width = int(main_w * scale_factor)
+                new_height = int(main_h * scale_factor)
+                video_clip_resized = video_clip.resized(new_size=(new_width, new_height))
+            else:
+                video_clip_resized = video_clip
+                
+            video_clip = CompositeVideoClip([bg_clip, video_clip_resized.with_position("center")])
+        except Exception as e:
+            logger.error(f"failed to apply 2-layer background synthesis: {str(e)}")
+
     audio_clip = AudioFileClip(audio_path).with_effects(
         [afx.MultiplyVolume(params.voice_volume)]
     )
@@ -1044,14 +1085,63 @@ def generate_video(
             font_size=params.font_size,
         )
 
+    text_clips = []
+    
+    # タイトル表示
+    video_title = getattr(params, "video_title", "")
+    if video_title:
+        try:
+            margin_x_ratio = getattr(params, "text_margin_x", 0.05)
+            margin_y_ratio = getattr(params, "text_margin_y", 0.1)
+            title_max_width = int(video_width * (1.0 - 2 * margin_x_ratio))
+            title_font_size = int(params.font_size * 1.2)
+            
+            wrapped_title, title_height = wrap_text(
+                video_title,
+                max_width=title_max_width,
+                font=font_path,
+                fontsize=title_font_size,
+            )
+            
+            title_lines = wrapped_title.split("\n")
+            title_interline = int(title_font_size * 0.25)
+            title_vertical_padding = 10
+            title_img_height = int(title_height + 2 * title_vertical_padding + (title_interline * (len(title_lines) - 1)))
+            
+            title_pil = Image.new("RGBA", (title_max_width, title_img_height), (0, 0, 0, 0))
+            title_draw = ImageDraw.Draw(title_pil)
+            title_font = ImageFont.truetype(font_path, title_font_size)
+            
+            for idx, line in enumerate(title_lines):
+                line_w = title_font.getlength(line)
+                x = (title_max_width - line_w) / 2
+                y = title_vertical_padding + idx * (title_font_size + title_interline)
+                
+                title_draw.text(
+                    (x, y),
+                    line,
+                    font=title_font,
+                    fill=params.text_fore_color or "#FFFFFF",
+                    stroke_width=int(params.stroke_width) if params.stroke_width is not None else 1,
+                    stroke_fill=params.stroke_color or "#000000"
+                )
+                
+            title_clip = ImageClip(np.array(title_pil), transparent=True)
+            title_clip = title_clip.with_duration(video_clip.duration).with_position(("center", video_height * margin_y_ratio))
+            text_clips.append(title_clip)
+            logger.info(f"added title clip: {video_title}")
+        except Exception as e:
+            logger.error(f"failed to add title clip: {str(e)}")
+
     if subtitle_path and os.path.exists(subtitle_path):
         sub = SubtitlesClip(
             subtitles=subtitle_path, encoding="utf-8", make_textclip=make_textclip
         )
-        text_clips = []
         for item in sub.subtitles:
             clip = create_text_clip(subtitle_item=item)
             text_clips.append(clip)
+            
+    if text_clips:
         video_clip = CompositeVideoClip([video_clip, *text_clips])
 
     bgm_file = get_bgm_file(bgm_type=params.bgm_type, bgm_file=params.bgm_file)
@@ -1069,6 +1159,10 @@ def generate_video(
             logger.error(f"failed to add bgm: {str(e)}")
 
     video_clip = video_clip.with_audio(audio_clip)
+    output_audio_fps = int(getattr(audio_clip, "fps", 0) or 44100)
+
+
+
     # 显式沿用输入音频的采样率；如果取不到，再回退到 MoviePy 默认的 44100Hz。
     # 这样可以减少不同运行环境，尤其是 Docker 环境中再次重采样带来的音质波动。
     output_audio_fps = int(getattr(audio_clip, "fps", 0) or 44100)

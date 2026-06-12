@@ -309,3 +309,82 @@ def load_locales(i18n_dir):
 
 def parse_extension(filename):
     return Path(filename).suffix.lower().lstrip('.')
+
+
+def render_task_folder_name(params, uuid_str: str = "") -> str:
+    from datetime import datetime
+    from jinja2 import Template
+    import re
+    from app.config import config
+    
+    if not uuid_str:
+        uuid_str = get_uuid()
+        
+    template_str = config.app.get("task_folder_template", "{{task_id}}")
+    now = datetime.now()
+    llm_provider = config.app.get("llm_provider", "openai")
+    model_name = config.app.get(f"{llm_provider}_model_name", "local-model")
+    
+    context = {
+        "task_id": uuid_str,
+        "uuid": uuid_str,
+        "datetime": now.strftime("%Y%m%d_%H%M%S"),
+        "date": now.strftime("%Y%m%d"),
+        "time": now.strftime("%H%M%S"),
+        "model_name": model_name,
+        "video_subject": getattr(params, "video_subject", "") or "video",
+    }
+    
+    try:
+        t = Template(template_str)
+        rendered = t.render(context)
+    except Exception as e:
+        logger.error(f"Jinja template render failed: {e}, fallback to uuid")
+        rendered = uuid_str
+        
+    # クレンジング
+    safe_name = re.sub(r'[\\/*?:"<>|\s]', '_', rendered)
+    safe_name = safe_name.strip(' ._')
+    if not safe_name:
+        safe_name = uuid_str
+    return safe_name
+
+
+def check_and_replace_localhost(url: str) -> str:
+    """
+    Dockerコンテナ環境で実行されている場合、URL内のlocalhost / 127.0.0.1 / 0.0.0.0 を
+    ホストマシンを指す host.docker.internal に自動置換します。
+    """
+    if not url:
+        return url
+
+    # Docker環境判定
+    is_docker = os.path.exists('/.dockerenv')
+    if not is_docker:
+        return url
+
+    from urllib.parse import urlparse, urlunparse
+
+    # http:// や https:// 等のスキームがない場合、urlparseでホスト名が正しく解析できないため
+    # 一時的にスキームを付与してパースします
+    has_scheme = re.match(r'^[a-zA-Z0-9+-.]+://', url)
+    parse_url = url if has_scheme else f"http://{url}"
+
+    try:
+        parsed = urlparse(parse_url)
+        hostname = parsed.hostname
+        if hostname in ('localhost', '127.0.0.1', '0.0.0.0'):
+            port_suffix = f":{parsed.port}" if parsed.port is not None else ""
+            new_netloc = f"host.docker.internal{port_suffix}"
+            new_parsed = parsed._replace(netloc=new_netloc)
+            result = urlunparse(new_parsed)
+            if not has_scheme:
+                result = result.replace("http://", "", 1)
+            
+            logger.info(f"Docker environment detected: replaced localhost to host.docker.internal. URL: {url} -> {result}")
+            return result
+    except Exception as e:
+        logger.error(f"failed to parse url for localhost replacement check: {url}, error: {str(e)}")
+
+    return url
+

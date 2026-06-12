@@ -11,6 +11,8 @@ services:
       - "127.0.0.1:8501:8501"
     command: [ "streamlit", "run", "./webui/Main.py","--browser.serverAddress=127.0.0.1","--server.enableCORS=True","--browser.gatherUsageStats=False" ]
     volumes: *common-volumes
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: always
   api:
     build:
@@ -21,4 +23,6 @@ services:
       - "127.0.0.1:8080:8080"
     command: [ "python3", "main.py" ]
     volumes: *common-volumes
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: always

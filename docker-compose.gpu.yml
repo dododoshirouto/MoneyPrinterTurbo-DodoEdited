@@ -14,10 +14,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.gpu
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
   api:
     build:
       context: .
       dockerfile: Dockerfile.gpu
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     deploy:
       resources:
         reservations:

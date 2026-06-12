@@ -74,6 +74,7 @@ class VideoParams(BaseModel):
     video_script: str = ""  # Script used to generate the video
     video_terms: Optional[str | list] = None  # Keywords used to generate the video
     video_aspect: Optional[VideoAspect] = VideoAspect.portrait.value
+    video_clip_fit: Optional[str] = "contain"  # contain, cover
     video_concat_mode: Optional[VideoConcatMode] = VideoConcatMode.random.value
     video_transition_mode: Optional[VideoTransitionMode] = None
     video_clip_duration: Optional[int] = 5
@@ -102,6 +103,24 @@ class VideoParams(BaseModel):
     text_fore_color: Optional[str] = "#FFFFFF"
     text_background_color: Union[bool, str] = True
     rounded_subtitle_background: bool = False
+
+    video_margin_ratio: Optional[float] = 0.0
+    video_title: Optional[str] = ""
+    text_margin_x: Optional[float] = 0.05
+    text_margin_y: Optional[float] = 0.1
+    bg_video_type: Optional[str] = "none"
+    bg_video_file: Optional[str] = ""
+
+    text_color_highlight_enabled: bool = False
+    color1_fore: str = "#FF3B30"
+    color1_stroke: str = "#000000"
+    color1_stroke_width: float = 1.5
+    color2_fore: str = "#007AFF"
+    color2_stroke: str = "#FFFFFF"
+    color2_stroke_width: float = 1.5
+    color3_fore: str = "#FFCC00"
+    color3_stroke: str = "#000000"
+    color3_stroke_width: float = 1.5
 
     font_size: int = 60
     stroke_color: Optional[str] = "#000000"

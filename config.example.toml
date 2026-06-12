@@ -62,6 +62,12 @@ coverr_api_keys = []
 #   litellm     (100+ providers via LiteLLM gateway)
 llm_provider = "openai"
 
+########## LLM.cpp Settings
+# If running inside docker container, replace "localhost" with "host.docker.internal" (e.g. "http://host.docker.internal:8080/v1")
+llmcpp_base_url = "http://localhost:8080/v1"
+llmcpp_model_name = "local-model"
+llmcpp_api_key = "llmcpp"
+
 ########## Pollinations AI Settings
 # Visit https://pollinations.ai/ to learn more
 # API Key is optional - leave empty for public access
@@ -80,6 +86,17 @@ pollinations_model_name = "openai-fast"
 ollama_base_url = ""
 # Check your available models at https://ollama.com/library
 ollama_model_name = ""
+
+########## VOICEVOX & AivisSpeech Settings
+# If running inside docker container, replace "127.0.0.1" with "host.docker.internal" (e.g. "http://host.docker.internal:50021")
+voicevox_base_url = "http://127.0.0.1:50021"
+aivisspeech_base_url = "http://127.0.0.1:10101"
+
+########## Task & Video Settings
+# Jinja pattern for task folder name inside storage/tasks/
+task_folder_template = "{{task_id}}"
+# Video clip fit mode: "contain" or "cover"
+video_clip_fit = "contain"
 
 ########## OpenAI API Key
 # Get your API key at https://platform.openai.com/api-keys

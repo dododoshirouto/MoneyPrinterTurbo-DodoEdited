@@ -9,6 +9,7 @@ from openai import AzureOpenAI, OpenAI
 from openai.types.chat import ChatCompletion
 
 from app.config import config
+from app.utils import utils
 
 _max_retries = 5
 _DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
@@ -153,10 +154,15 @@ def _generate_response(prompt: str) -> str:
             )
         else:
             api_version = ""  # for azure
+            base_url = ""
             if llm_provider == "moonshot":
                 api_key = config.app.get("moonshot_api_key")
                 model_name = config.app.get("moonshot_model_name")
                 base_url = "https://api.moonshot.cn/v1"
+            elif llm_provider == "llmcpp":
+                api_key = config.app.get("llmcpp_api_key", "llmcpp")
+                model_name = config.app.get("llmcpp_model_name", "local-model")
+                base_url = config.app.get("llmcpp_base_url", "http://localhost:8080/v1")
             elif llm_provider == "ollama":
                 # api_key = config.app.get("openai_api_key")
                 api_key = "ollama"  # any string works but you are required to have one
@@ -278,6 +284,7 @@ def _generate_response(prompt: str) -> str:
                     base_url = config.app.get("pollinations_base_url", "")
                     if not base_url:
                         base_url = "https://text.pollinations.ai/openai"
+                    base_url = utils.check_and_replace_localhost(base_url)
                     model_name = config.app.get("pollinations_model_name", "openai-fast")
                    
                     # Prepare the payload
@@ -318,7 +325,10 @@ def _generate_response(prompt: str) -> str:
             elif llm_provider == "litellm":
                 model_name = config.app.get("litellm_model_name")
 
-            if llm_provider not in ["pollinations", "ollama", "litellm"]:  # Skip validation for providers that don't require API key
+            if base_url:
+                base_url = utils.check_and_replace_localhost(base_url)
+
+            if llm_provider not in ["pollinations", "ollama", "litellm", "llmcpp"]:  # Skip validation for providers that don't require API key
                 if not api_key:
                     raise ValueError(
                         f"{llm_provider}: api_key is not set, please set it in the config.toml file."
@@ -1087,6 +1097,71 @@ def generate_social_metadata(
 
     logger.warning("falling back to heuristic social metadata")
     return _fallback_social_metadata(video_subject, video_script, platform)
+
+
+def generate_title(script: str) -> str:
+    prompt = f"""
+# Role: Video Title Generator
+
+## Goals:
+Generate a catchy, short title (maximum 15 characters) for a video based on the provided video script.
+
+## Constrains:
+1. The title must be 15 characters or less.
+2. Get straight to the point, do not include quotes, markdown formatting, or introductory words.
+3. Return only the raw text of the title.
+4. Respond in the same language as the video script.
+
+## Video Script:
+{script}
+""".strip()
+    
+    logger.info("generating video title from script")
+    title = ""
+    for i in range(_max_retries):
+        try:
+            response = _generate_response(prompt=prompt)
+            if response and "Error: " not in response:
+                title = response.replace("*", "").replace("#", "").replace('"', "").replace("'", "").strip()
+                title = title[:15]
+                break
+        except Exception as e:
+            logger.error(f"failed to generate title: {e}")
+    return title
+
+
+def highlight_script_with_llm(script: str) -> str:
+    prompt = f"""
+# Role: Video Script Highlighter
+
+## Goals:
+Markup the provided video script to highlight key terms and make it visually engaging when displayed as subtitles.
+Use three distinct color tags:
+- `<color1>...</color1>` for core keywords, most important concepts or visual anchors (use sparingly, 2-4 per paragraph).
+- `<color2>...</color2>` for secondary important words, numbers, or action verbs.
+- `<color3>...</color3>` for key emotional words, adjectives, or attention-grabbing phrases.
+
+## Constrains:
+1. Do NOT change any words or sentences of the script itself. Only insert the opening and closing tags.
+2. Ensure tags are properly closed and nested correctly.
+3. Return only the marked-up script. Do not include markdown code fences or any conversational filler.
+4. If a paragraph has no suitable keywords, do not force tags.
+
+## Video Script:
+{script}
+""".strip()
+
+    logger.info("highlighting video script with llm")
+    highlighted = ""
+    for i in range(_max_retries):
+        try:
+            response = _generate_response(prompt=prompt)
+            if response and "Error: " not in response:
+                highlighted = response.replace("```xml", "").replace("```html", "").replace("```", "").strip()
+                break
+        except Exception as e:
+            logger.error(f"failed to highlight script: {e}")
+    return highlighted if highlighted else script
 
 
 if __name__ == "__main__":

@@ -23,7 +23,7 @@ from app.models.schema import (
     VideoParams,
     VideoTransitionMode,
 )
-from app.services import llm, voice
+from app.services import llm, voice, presets
 from app.services import task as tm
 from app.utils import utils
 
@@ -145,15 +145,18 @@ def get_all_songs():
 
 def open_task_folder(task_id):
     try:
-        # task_id 应始终是服务端生成的 UUID。这里先做格式校验，避免异常值
-        # 通过路径拼接访问任务目录之外的位置，也避免后续打开目录时触发
-        # 平台 shell 对特殊字符的解释。
-        normalized_task_id = str(UUID(str(task_id)))
-        tasks_root = os.path.abspath(os.path.join(root_dir, "storage", "tasks"))
-        path = os.path.abspath(os.path.join(tasks_root, normalized_task_id))
+        # Jinja2 によるカスタムフォルダ名に対応するため、UUID検証から
+        # 禁止文字クレンジングとパス穿越防止に緩和します。
+        import re
+        safe_task_id = re.sub(r'[\\/*?:"<>|\s]', '_', str(task_id)).strip(' ._')
+        if not safe_task_id:
+            logger.warning("invalid empty task_id")
+            return
 
-        # 即使 UUID 校验通过，也再次确认最终路径仍在任务根目录内，避免
-        # 未来调用方调整 task_id 来源时引入路径穿越风险。
+        tasks_root = os.path.abspath(os.path.join(root_dir, "storage", "tasks"))
+        path = os.path.abspath(os.path.join(tasks_root, safe_task_id))
+
+        # パス穿越の脆弱性チェック
         if not path.startswith(tasks_root + os.sep):
             logger.warning(f"invalid task folder path: {path}")
             return
@@ -252,6 +255,124 @@ def get_groq_model_ids(api_key: str, base_url: str) -> list[str]:
         logger.warning(f"failed to fetch groq models: {e}")
         return []
 
+def on_preset_selected(preset_dict):
+    selected = st.session_state.get("selected_preset_selector")
+    if selected and selected in preset_dict:
+        loaded_data = preset_dict[selected]
+        for k, v in loaded_data.items():
+            if k not in ["ui", "session"]:
+                config.app[k] = v
+        if "ui" in loaded_data:
+            for k, v in loaded_data["ui"].items():
+                config.ui[k] = v
+                
+        # Widgetキャッシュのクリア
+        keys_to_keep = {"top_language_selector", "selected_preset_selector", "ui_language"}
+        for key in list(st.session_state.keys()):
+            if key not in keys_to_keep and not key.startswith("_"):
+                st.session_state.pop(key, None)
+                
+        if "session" in loaded_data:
+            for k, v in loaded_data["session"].items():
+                st.session_state[k] = v
+                
+        config.save_config()
+        # コールバック内なので安全に変更可能
+        st.session_state["selected_preset_selector"] = ""
+        st.session_state["preset_loaded_message"] = f"{tr('Preset loaded successfully')}: {selected}"
+
+# プリセット保存/読込機能のUI
+st.write(tr("Preset Settings"))
+if "preset_loaded_message" in st.session_state and st.session_state["preset_loaded_message"]:
+    st.success(st.session_state["preset_loaded_message"])
+    st.session_state["preset_loaded_message"] = ""
+
+preset_cols = st.columns([3, 3, 2])
+with preset_cols[0]:
+    # プリセット一覧を取得
+    preset_dict = presets.load_presets()
+    preset_names = list(preset_dict.keys())
+    
+    selected_preset = st.selectbox(
+        tr("Select Preset"),
+        options=[""] + preset_names,
+        key="selected_preset_selector",
+        label_visibility="collapsed",
+        on_change=on_preset_selected,
+        args=(preset_dict,)
+    )
+with preset_cols[1]:
+    new_preset_name = st.text_input(
+        tr("Preset Name"),
+        key="new_preset_name_input",
+        placeholder=tr("Preset Name"),
+        label_visibility="collapsed"
+    )
+with preset_cols[2]:
+    save_col, delete_col = st.columns(2)
+    # プリセット保存ボタン
+    if save_col.button(tr("Save Preset"), use_container_width=True):
+        if new_preset_name.strip():
+            preset_data = {}
+            app_keys = [
+                "llm_provider", "video_source", "video_concat_mode", "video_clip_fit",
+                "video_clip_duration", "match_materials_to_script", "video_count",
+                "voice_name", "voice_volume", "voice_rate", "bgm_type", "bgm_file", "bgm_volume",
+                "subtitle_enabled", "font_name", "text_fore_color", "text_background_color",
+                "rounded_subtitle_background", "font_size", "stroke_color", "stroke_width",
+                "n_threads", "paragraph_number", "video_script_prompt", "custom_system_prompt",
+                "task_folder_template"
+            ]
+            for provider in ["openai", "aihubmix", "aimlapi", "moonshot", "azure", "qwen", "deepseek", "modelscope", "gemini", "grok", "groq", "ollama", "llmcpp", "g4f", "oneapi", "cloudflare", "ernie", "minimax", "mimo", "pollinations", "litellm"]:
+                app_keys.append(f"{provider}_model_name")
+                app_keys.append(f"{provider}_api_key")
+                app_keys.append(f"{provider}_base_url")
+                if provider == "ernie":
+                    app_keys.append(f"{provider}_secret_key")
+                if provider == "cloudflare":
+                    app_keys.append(f"{provider}_account_id")
+            
+            for k in app_keys:
+                if k in config.app:
+                    preset_data[k] = config.app[k]
+                    
+            ui_keys = [
+                "subtitle_position", "custom_position", "video_margin_ratio",
+                "bg_video_type", "bg_video_file", "text_margin_x", "text_margin_y",
+                "text_color_highlight_enabled", "color1_fore", "color1_stroke",
+                "color1_stroke_width", "color2_fore", "color2_stroke",
+                "color2_stroke_width", "color3_fore", "color3_stroke",
+                "color3_stroke_width"
+            ]
+            preset_data["ui"] = {}
+            for k in ui_keys:
+                if k in config.ui:
+                    preset_data["ui"][k] = config.ui[k]
+                    
+            preset_data["session"] = {
+                "use_custom_system_prompt": st.session_state.get("use_custom_system_prompt", False),
+            }
+            
+            if presets.save_preset(new_preset_name.strip(), preset_data):
+                st.success(tr("Preset saved successfully"))
+                st.rerun()
+        else:
+            st.error("Please enter a preset name")
+            
+    # プリセット削除ボタン
+    if delete_col.button(tr("Delete"), use_container_width=True):
+        if selected_preset:
+            if presets.delete_preset(selected_preset):
+                st.success(f"Preset deleted: {selected_preset}")
+                st.rerun()
+        else:
+            st.error("Please select a preset to delete")
+
+# ロード処理はon_preset_selectedコールバックに移行されました。
+
+
+st.write("---")
+
 # 创建基础设置折叠框
 if not config.app.get("hide_config", False):
     with st.expander(tr("Basic Settings"), expanded=False):
@@ -273,6 +394,15 @@ if not config.app.get("hide_config", False):
                 tr("Hide Log"), value=config.ui.get("hide_log", False)
             )
             config.ui["hide_log"] = hide_log
+
+            # 任务文件夹命名模板
+            task_folder_template = st.text_input(
+                tr("Task Folder Template"),
+                value=config.app.get("task_folder_template", "{{task_id}}"),
+                help=tr("Template variables: {{task_id}}, {{datetime}}, {{date}}, {{time}}, {{model_name}}, {{video_subject}}")
+            )
+            config.app["task_folder_template"] = task_folder_template
+
 
         # 中间面板 - LLM 设置
 
@@ -298,6 +428,7 @@ if not config.app.get("hide_config", False):
                 ("Grok", "grok"),
                 ("Groq", "groq"),
                 ("Ollama", "ollama"),
+                ("LLM.cpp", "llmcpp"),
                 ("G4f", "g4f"),
                 ("OneAPI", "oneapi"),
                 ("Cloudflare", "cloudflare"),
@@ -336,6 +467,19 @@ if not config.app.get("hide_config", False):
             llm_account_id = config.app.get(f"{llm_provider}_account_id", "")
 
             tips = ""
+            if llm_provider == "llmcpp":
+                if not llm_model_name:
+                    llm_model_name = "local-model"
+                if not llm_base_url:
+                    llm_base_url = "http://localhost:8080/v1"
+                with llm_helper:
+                    tips = """
+                            ##### LLM.cpp Configuration
+                            - **API Key**: Usually not required (you can leave it empty or any string)
+                            - **Base Url**: Default is http://localhost:8080/v1 (adjust if needed)
+                            - **Model Name**: Model name specified in llama.cpp server configuration
+                            """
+
             if llm_provider == "ollama":
                 if not llm_model_name:
                     llm_model_name = "qwen:7b"
@@ -723,12 +867,13 @@ with left_panel:
                 tr("Script Paragraph Number"),
                 min_value=llm.MIN_SCRIPT_PARAGRAPH_NUMBER,
                 max_value=llm.MAX_SCRIPT_PARAGRAPH_NUMBER,
-                value=st.session_state.get("paragraph_number_input", 1),
+                value=config.app.get("paragraph_number", 1),
                 key="paragraph_number_input",
             )
             params.video_script_prompt = st.text_area(
                 tr("Custom Script Requirements"),
                 height=100,
+                value=config.app.get("video_script_prompt", ""),
                 max_chars=llm.MAX_SCRIPT_PROMPT_LENGTH,
                 placeholder=tr("Custom Script Requirements Placeholder"),
                 key="video_script_prompt",
@@ -744,12 +889,22 @@ with left_panel:
                 custom_system_prompt = st.text_area(
                     tr("Custom System Prompt"),
                     height=240,
+                    value=config.app.get("custom_system_prompt", ""),
                     max_chars=llm.MAX_SCRIPT_SYSTEM_PROMPT_LENGTH,
                     key="custom_system_prompt",
                 ).strip()
                 params.custom_system_prompt = custom_system_prompt
             else:
                 params.custom_system_prompt = ""
+
+        # 動画タイトル入力
+        saved_video_title = st.session_state.get("video_title", "")
+        params.video_title = st.text_input(
+            tr("Video Title"),
+            value=saved_video_title,
+            key="video_title_input",
+        ).strip()
+        st.session_state["video_title"] = params.video_title
 
         if st.button(
             tr("Generate Video Script and Keywords"), key="auto_generate_script"
@@ -762,22 +917,56 @@ with left_panel:
                     video_script_prompt=params.video_script_prompt,
                     custom_system_prompt=params.custom_system_prompt,
                 )
-                terms = llm.generate_terms(
-                    params.video_subject,
-                    script,
-                    amount=8 if params.match_materials_to_script else 5,
-                    match_script_order=params.match_materials_to_script,
-                )
                 if "Error: " in script:
                     st.error(tr(script))
-                elif "Error: " in terms:
-                    st.error(tr(terms))
                 else:
-                    st.session_state["video_script"] = script
-                    st.session_state["video_terms"] = ", ".join(terms)
+                    # タイトルの自動生成
+                    title = llm.generate_title(script)
+                    st.session_state["video_title"] = title
+                    
+                    # 色強調が有効な場合は自動ハイライト
+                    if getattr(params, "text_color_highlight_enabled", False):
+                        script = llm.highlight_script_with_llm(script)
+                        
+                    terms = llm.generate_terms(
+                        params.video_subject,
+                        script,
+                        amount=8 if params.match_materials_to_script else 5,
+                        match_script_order=params.match_materials_to_script,
+                    )
+                    
+                    if "Error: " in terms:
+                        st.error(tr(terms))
+                    else:
+                        st.session_state["video_script"] = script
+                        st.session_state["video_terms"] = ", ".join(terms)
+                        st.rerun()
+
         params.video_script = st.text_area(
             tr("Video Script"), value=st.session_state["video_script"], height=280
         )
+        
+        # タイトル・ハイライトAI生成ボタン
+        title_btn_cols = st.columns([0.5, 0.5])
+        with title_btn_cols[0]:
+            if st.button(tr("Generate Title from Script (AI)"), key="auto_generate_title"):
+                if not params.video_script:
+                    st.error(tr("Please Enter or Generate the Video Script First"))
+                else:
+                    with st.spinner(tr("Generating Video Title")):
+                        title = llm.generate_title(params.video_script)
+                        st.session_state["video_title"] = title
+                        st.rerun()
+        with title_btn_cols[1]:
+            if st.button(tr("Highlight Script with AI Tags"), key="auto_highlight_script"):
+                if not params.video_script:
+                    st.error(tr("Please Enter or Generate the Video Script First"))
+                else:
+                    with st.spinner(tr("Highlighting Video Script")):
+                        highlighted = llm.highlight_script_with_llm(params.video_script)
+                        st.session_state["video_script"] = highlighted
+                        st.rerun()
+
         if st.button(tr("Generate Video Keywords"), key="auto_generate_terms"):
             if not params.video_script:
                 st.error(tr("Please Enter the Video Subject"))
@@ -896,6 +1085,23 @@ with middle_panel:
         )
         params.video_aspect = VideoAspect(video_aspect_ratios[selected_index][1])
 
+        # Video clip fit mode: contain or cover
+        video_clip_fits = [
+            (tr("Contain"), "contain"),
+            (tr("Cover"), "cover"),
+        ]
+        saved_fit_mode = config.app.get("video_clip_fit", "contain").lower()
+        saved_fit_index = 1 if saved_fit_mode == "cover" else 0
+        selected_index = st.selectbox(
+            tr("Fit Mode"),
+            options=range(len(video_clip_fits)),
+            format_func=lambda x: video_clip_fits[x][0],
+            index=saved_fit_index,
+            key=f"video_clip_fit_for_{params.video_source}",
+        )
+        params.video_clip_fit = video_clip_fits[selected_index][1]
+        config.app["video_clip_fit"] = params.video_clip_fit
+
         params.video_clip_duration = st.selectbox(
             tr("Clip Duration"), options=[2, 3, 4, 5, 6, 7, 8, 9, 10], index=1
         )
@@ -936,6 +1142,49 @@ with middle_panel:
                 help=tr("Video Encoder Help"),
             )
             config.app["video_codec"] = video_codec_options[selected_codec_index][1]
+
+            # 動画上下マージン
+            st.write("---")
+            saved_video_margin_ratio = config.ui.get("video_margin_ratio", 0.0)
+            params.video_margin_ratio = st.slider(
+                tr("Video Margin Ratio (Top/Bottom)"),
+                0.0, 0.45, saved_video_margin_ratio, step=0.01,
+                help=tr("Video Margin Ratio Help"),
+            )
+            config.ui["video_margin_ratio"] = params.video_margin_ratio
+
+            # 背景動画（2レイヤー合成）設定
+            st.write("---")
+            st.write(tr("2-Layer Background Video Settings"))
+            bg_video_options = [
+                (tr("None"), "none"),
+                (tr("Random Background Video"), "random"),
+                (tr("Custom Background Video File"), "custom"),
+            ]
+            saved_bg_video_type = config.ui.get("bg_video_type", "none")
+            saved_bg_index = 0
+            for i, (_, type_val) in enumerate(bg_video_options):
+                if type_val == saved_bg_video_type:
+                    saved_bg_index = i
+                    break
+                    
+            selected_bg_index = st.selectbox(
+                tr("Background Video Type"),
+                options=range(len(bg_video_options)),
+                index=saved_bg_index,
+                format_func=lambda x: bg_video_options[x][0],
+            )
+            params.bg_video_type = bg_video_options[selected_bg_index][1]
+            config.ui["bg_video_type"] = params.bg_video_type
+            
+            if params.bg_video_type == "custom":
+                saved_bg_video_file = config.ui.get("bg_video_file", "")
+                params.bg_video_file = st.text_input(
+                    tr("Custom Background Video File Path"),
+                    value=saved_bg_video_file,
+                    key="custom_bg_video_file_input",
+                )
+                config.ui["bg_video_file"] = params.bg_video_file
     with st.container(border=True):
         st.write(tr("Audio Settings"))
 
@@ -947,6 +1196,8 @@ with middle_panel:
             ("siliconflow", "SiliconFlow TTS"),
             ("gemini-tts", "Google Gemini TTS"),
             ("mimo-tts", "Xiaomi MiMo TTS"),
+            ("voicevox", "VOICEVOX"),
+            ("aivisspeech", "AivisSpeech"),
         ]
 
         # 获取保存的TTS服务器，默认为v1
@@ -983,6 +1234,9 @@ with middle_panel:
         elif selected_tts_server == "mimo-tts":
             # 获取 Xiaomi MiMo TTS 的预置音色列表
             filtered_voices = voice.get_mimo_voices()
+        elif selected_tts_server in ["voicevox", "aivisspeech"]:
+            # VOICEVOX または AivisSpeech の話者リストを取得
+            filtered_voices = voice.get_voicevox_voices(tts_type=selected_tts_server)
         else:
             # 获取Azure的声音列表
             all_voices = voice.get_all_azure_voices(filter_locals=None)
@@ -1000,6 +1254,19 @@ with middle_panel:
 
         if selected_tts_server == voice.NO_VOICE_NAME:
             friendly_names = {voice.NO_VOICE_NAME: tr("No Voice")}
+        elif selected_tts_server in ["voicevox", "aivisspeech"]:
+            friendly_names = {}
+            for v in filtered_voices:
+                parts = v.split(":")
+                if len(parts) >= 3:
+                    full_name = parts[2]
+                    name_style = full_name.split("-")
+                    if len(name_style) >= 2:
+                        friendly_names[v] = f"{name_style[0]} ({name_style[1]})"
+                    else:
+                        friendly_names[v] = full_name
+                else:
+                    friendly_names[v] = v
         else:
             friendly_names = {
                 v: v.replace("Female", tr("Female"))
@@ -1334,6 +1601,77 @@ with right_panel:
             config.ui["rounded_subtitle_background"] = (
                 params.rounded_subtitle_background
             )
+
+        # 文字セーフマージン設定
+        st.write("---")
+        st.write(tr("Text Margin Settings"))
+        saved_text_margin_x = config.ui.get("text_margin_x", 0.05)
+        params.text_margin_x = st.slider(tr("Text Horizontal Margin Ratio"), 0.0, 0.45, saved_text_margin_x, step=0.01)
+        config.ui["text_margin_x"] = params.text_margin_x
+
+        saved_text_margin_y = config.ui.get("text_margin_y", 0.1)
+        params.text_margin_y = st.slider(tr("Text Vertical Margin Ratio"), 0.0, 0.45, saved_text_margin_y, step=0.01)
+        config.ui["text_margin_y"] = params.text_margin_y
+
+        # 色強調設定
+        st.write("---")
+        saved_text_color_highlight_enabled = config.ui.get("text_color_highlight_enabled", False)
+        params.text_color_highlight_enabled = st.checkbox(
+            tr("Enable Text Color Highlight"),
+            value=saved_text_color_highlight_enabled
+        )
+        config.ui["text_color_highlight_enabled"] = params.text_color_highlight_enabled
+
+        if params.text_color_highlight_enabled:
+            st.info(tr("Highlight Tag Info"))
+            
+            # 強調色1
+            st.write(tr("Highlight Color 1"))
+            saved_color1_fore = config.ui.get("color1_fore", "#FF3B30")
+            saved_color1_stroke = config.ui.get("color1_stroke", "#000000")
+            saved_color1_stroke_width = config.ui.get("color1_stroke_width", 1.5)
+            c1_cols = st.columns([0.3, 0.3, 0.4])
+            with c1_cols[0]:
+                params.color1_fore = st.color_picker(tr("Color 1 Text"), saved_color1_fore, key="color1_fore_picker")
+                config.ui["color1_fore"] = params.color1_fore
+            with c1_cols[1]:
+                params.color1_stroke = st.color_picker(tr("Color 1 Border"), saved_color1_stroke, key="color1_stroke_picker")
+                config.ui["color1_stroke"] = params.color1_stroke
+            with c1_cols[2]:
+                params.color1_stroke_width = st.slider(tr("Color 1 Border Width"), 0.0, 10.0, saved_color1_stroke_width, key="color1_stroke_width_slider")
+                config.ui["color1_stroke_width"] = params.color1_stroke_width
+                
+            # 強調色2
+            st.write(tr("Highlight Color 2"))
+            saved_color2_fore = config.ui.get("color2_fore", "#007AFF")
+            saved_color2_stroke = config.ui.get("color2_stroke", "#FFFFFF")
+            saved_color2_stroke_width = config.ui.get("color2_stroke_width", 1.5)
+            c2_cols = st.columns([0.3, 0.3, 0.4])
+            with c2_cols[0]:
+                params.color2_fore = st.color_picker(tr("Color 2 Text"), saved_color2_fore, key="color2_fore_picker")
+                config.ui["color2_fore"] = params.color2_fore
+            with c2_cols[1]:
+                params.color2_stroke = st.color_picker(tr("Color 2 Border"), saved_color2_stroke, key="color2_stroke_picker")
+                config.ui["color2_stroke"] = params.color2_stroke
+            with c2_cols[2]:
+                params.color2_stroke_width = st.slider(tr("Color 2 Border Width"), 0.0, 10.0, saved_color2_stroke_width, key="color2_stroke_width_slider")
+                config.ui["color2_stroke_width"] = params.color2_stroke_width
+                
+            # 強調色3
+            st.write(tr("Highlight Color 3"))
+            saved_color3_fore = config.ui.get("color3_fore", "#FFCC00")
+            saved_color3_stroke = config.ui.get("color3_stroke", "#000000")
+            saved_color3_stroke_width = config.ui.get("color3_stroke_width", 1.5)
+            c3_cols = st.columns([0.3, 0.3, 0.4])
+            with c3_cols[0]:
+                params.color3_fore = st.color_picker(tr("Color 3 Text"), saved_color3_fore, key="color3_fore_picker")
+                config.ui["color3_fore"] = params.color3_fore
+            with c3_cols[1]:
+                params.color3_stroke = st.color_picker(tr("Color 3 Border"), saved_color3_stroke, key="color3_stroke_picker")
+                config.ui["color3_stroke"] = params.color3_stroke
+            with c3_cols[2]:
+                params.color3_stroke_width = st.slider(tr("Color 3 Border Width"), 0.0, 10.0, saved_color3_stroke_width, key="color3_stroke_width_slider")
+                config.ui["color3_stroke_width"] = params.color3_stroke_width
     with st.expander(tr("Click to show API Key management"), expanded=False):
         st.subheader(tr("Manage Pexels, Pixabay and Coverr API Keys"))
 
@@ -1441,7 +1779,8 @@ with right_panel:
 start_button = st.button(tr("Generate Video"), use_container_width=True, type="primary")
 if start_button:
     config.save_config()
-    task_id = str(uuid4())
+    raw_uuid = str(uuid4())
+    task_id = utils.render_task_folder_name(params, raw_uuid)
     if not params.video_subject and not params.video_script:
         st.error(tr("Video Script and Subject Cannot Both Be Empty"))
         scroll_to_bottom()
