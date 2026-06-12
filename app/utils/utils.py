@@ -41,6 +41,11 @@ def to_json(obj):
             # If the object is a list or tuple, recursively process each element
             elif isinstance(o, (list, tuple)):
                 return [serialize(item) for item in o]
+            # Pydantic support
+            elif hasattr(o, "model_dump") and callable(o.model_dump):
+                return serialize(o.model_dump())
+            elif hasattr(o, "dict") and callable(o.dict):
+                return serialize(o.dict())
             # If the object is a custom type, attempt to return its __dict__ attribute
             elif hasattr(o, "__dict__"):
                 return serialize(o.__dict__)
@@ -321,7 +326,14 @@ def render_task_folder_name(params, uuid_str: str = "") -> str:
         uuid_str = get_uuid()
         
     template_str = config.app.get("task_folder_template", "{{task_id}}")
-    now = datetime.now()
+    from zoneinfo import ZoneInfo
+    tz_str = config.app.get("timezone", "Asia/Tokyo")
+    try:
+        tz = ZoneInfo(tz_str)
+        now = datetime.now(tz)
+    except Exception as e:
+        logger.warning(f"Invalid timezone config: {tz_str}, fallback to system timezone. Error: {e}")
+        now = datetime.now()
     llm_provider = config.app.get("llm_provider", "openai")
     model_name = config.app.get(f"{llm_provider}_model_name", "local-model")
     

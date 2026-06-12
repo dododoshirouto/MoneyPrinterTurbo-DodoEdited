@@ -199,6 +199,15 @@ def init_log():
         # 您可以根据需要调整这里的格式
         record["message"] = record["message"].replace(root_dir, ".")
 
+        # タイムゾーン変換: config に設定されたタイムゾーン（デフォルト Asia/Tokyo）を使用
+        try:
+            from zoneinfo import ZoneInfo
+            tz_name = config.app.get("timezone", "Asia/Tokyo") or "Asia/Tokyo"
+            tz = ZoneInfo(tz_name)
+            local_time = record["time"].astimezone(tz)
+        except Exception:
+            local_time = record["time"]
+
         _format = (
             "<green>{time:%Y-%m-%d %H:%M:%S}</> | "
             + "<level>{level}</> | "
@@ -206,6 +215,8 @@ def init_log():
             + "- <level>{message}</>"
             + "\n"
         )
+        # loguru の {time} は record["time"] を使うため、ローカル時間を record に反映する
+        record["time"] = local_time
         return _format
 
     logger.add(
@@ -279,6 +290,7 @@ def on_preset_selected(preset_dict):
         config.save_config()
         # コールバック内なので安全に変更可能
         st.session_state["selected_preset_selector"] = ""
+        st.session_state["subtitle_offset"] = config.app.get("subtitle_offset", 0.0)
         st.session_state["preset_loaded_message"] = f"{tr('Preset loaded successfully')}: {selected}"
 
 # プリセット保存/読込機能のUI
@@ -350,6 +362,17 @@ with preset_cols[2]:
                 config.ui["stroke_width"] = st.session_state["stroke_width"]
 
             preset_data = {}
+            if "subtitle_offset" in st.session_state:
+                config.app["subtitle_offset"] = st.session_state["subtitle_offset"]
+            if "voicevox_base_url_input" in st.session_state:
+                config.app["voicevox_base_url"] = st.session_state["voicevox_base_url_input"].strip()
+            if "aivisspeech_base_url_input" in st.session_state:
+                config.app["aivisspeech_base_url"] = st.session_state["aivisspeech_base_url_input"].strip()
+            if "timezone_input" in st.session_state:
+                config.app["timezone"] = st.session_state["timezone_input"].strip()
+            if "use_title_in_script" in st.session_state:
+                config.app["use_title_in_script"] = st.session_state["use_title_in_script"]
+
             app_keys = [
                 "llm_provider", "video_source", "video_concat_mode", "video_clip_fit",
                 "video_clip_duration", "match_materials_to_script", "video_count",
@@ -357,7 +380,9 @@ with preset_cols[2]:
                 "subtitle_enabled", "font_name", "text_fore_color", "text_background_color",
                 "rounded_subtitle_background", "font_size", "stroke_color", "stroke_width",
                 "n_threads", "paragraph_number", "video_script_prompt", "custom_system_prompt",
-                "task_folder_template", "video_transition_mode", "video_aspect", "use_custom_system_prompt"
+                "task_folder_template", "video_transition_mode", "video_aspect", "use_custom_system_prompt",
+                "use_title_in_script", "voicevox_base_url", "aivisspeech_base_url", "timezone",
+                "subtitle_offset"
             ]
             for provider in ["openai", "aihubmix", "aimlapi", "moonshot", "azure", "qwen", "deepseek", "modelscope", "gemini", "grok", "groq", "ollama", "llmcpp", "g4f", "oneapi", "cloudflare", "ernie", "minimax", "mimo", "pollinations", "litellm"]:
                 app_keys.append(f"{provider}_model_name")
@@ -938,7 +963,6 @@ with left_panel:
         params.video_title = st.text_input(
             tr("Video Title"),
             value=saved_video_title,
-            key="video_title_input",
         ).strip()
         st.session_state["video_title"] = params.video_title
 
@@ -956,13 +980,17 @@ with left_panel:
                 if "Error: " in script:
                     st.error(tr(script))
                 else:
-                    # タイトルの自動生成
-                    title = llm.generate_title(script)
-                    st.session_state["video_title"] = title
+                    # タイトルの自動生成 (空の場合のみ)
+                    if not params.video_title:
+                        title = llm.generate_title(script)
+                        st.session_state["video_title"] = title
                     
                     # 色強調が有効な場合は自動ハイライト
                     if getattr(params, "text_color_highlight_enabled", False):
                         script = llm.highlight_script_with_llm(script)
+                        current_title = st.session_state.get("video_title", "")
+                        if current_title:
+                            st.session_state["video_title"] = llm.highlight_title_with_llm(current_title)
                         
                     terms = llm.generate_terms(
                         params.video_subject,
@@ -998,9 +1026,12 @@ with left_panel:
                 if not params.video_script:
                     st.error(tr("Please Enter or Generate the Video Script First"))
                 else:
-                    with st.spinner(tr("Highlighting Video Script")):
+                    with st.spinner(tr("Highlighting Video Script and Title")):
                         highlighted = llm.highlight_script_with_llm(params.video_script)
                         st.session_state["video_script"] = highlighted
+                        current_title = st.session_state.get("video_title", "")
+                        if current_title:
+                            st.session_state["video_title"] = llm.highlight_title_with_llm(current_title)
                         st.rerun()
 
         if st.button(tr("Generate Video Keywords"), key="auto_generate_terms"):
@@ -1703,6 +1734,21 @@ with right_panel:
         saved_text_margin_y = config.ui.get("text_margin_y", 0.1)
         params.text_margin_y = st.slider(tr("Text Vertical Margin Ratio"), 0.0, 0.45, saved_text_margin_y, step=0.01)
         config.ui["text_margin_y"] = params.text_margin_y
+
+        # 字幕タイムオフセット設定 (音声ズレ補正)
+        st.write("---")
+        saved_subtitle_offset = config.app.get("subtitle_offset", 0.0)
+        params.subtitle_offset = st.number_input(
+            tr("Subtitle Offset (seconds)"),
+            min_value=-1.0,
+            max_value=3.0,
+            value=float(saved_subtitle_offset),
+            step=0.05,
+            format="%.2f",
+            help=tr("Subtitle Offset Help"),
+            key="subtitle_offset",
+        )
+        config.app["subtitle_offset"] = params.subtitle_offset
 
         # 色強調設定
         st.write("---")

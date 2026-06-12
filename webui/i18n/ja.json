@@ -187,6 +187,8 @@
     "Text Margin Settings": "文字のセーフエリア設定",
     "Text Horizontal Margin Ratio": "文字左右セーフマージン（割合）",
     "Text Vertical Margin Ratio": "文字上下セーフマージン（割合）",
+    "Subtitle Offset (seconds)": "字幕オフセット（秒）",
+    "Subtitle Offset Help": "音声と字幕のタイミングがずれる場合に調整します。正の値で字幕を遅らせ、負の値で前倒しにします。例: 0.50 で字幕が 0.5 秒遅れて表示されます。",
     "Enable Text Color Highlight": "文字の色強調（カラーハイライト）を有効にする",
     "Highlight Tag Info": "台本内で <color1>テキスト</color1> (赤), <color2>テキスト</color2> (青), <color3>テキスト</color3> (黄) などのタグを使って文字の色を部分的に変更できます。",
     "Highlight Color 1": "強調色 1",
@@ -207,6 +209,12 @@
     "Generating Video Title": "ビデオタイトルを生成中...",
     "Highlighting Video Script": "ビデオスクリプトをハイライト中...",
     "Task Folder Template": "タスクフォルダ名パターン",
-    "Template variables: {{task_id}}, {{datetime}}, {{date}}, {{time}}, {{model_name}}, {{video_subject}}": "使用可能な変数: {{task_id}}, {{datetime}}, {{date}}, {{time}}, {{model_name}}, {{video_subject}}"
+    "Template variables: {{task_id}}, {{datetime}}, {{date}}, {{time}}, {{model_name}}, {{video_subject}}": "使用可能な変数: {{task_id}}, {{datetime}}, {{date}}, {{time}}, {{model_name}}, {{video_subject}}",
+    "Timezone": "タイムゾーン",
+    "Timezone for task folder name (e.g. Asia/Tokyo, UTC)": "タスクフォルダ名に使用するタイムゾーン（例: Asia/Tokyo, UTC）",
+    "Video Source": "動画素材ソースから取得",
+    "Custom Background Video": "カスタム背景動画（ローカル）",
+    "No background videos found in resource/bg_videos": "resource/bg_videos に背景動画が見つかりません",
+    "Select Background Video": "背景動画の選択"
   }
 }

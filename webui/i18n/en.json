@@ -164,6 +164,12 @@
     "Video Encoder": "Video Encoder",
     "Video Encoder Help": "Advanced option. libx264 is the safest default. When a hardware encoder is selected, the app falls back to libx264 if the current FFmpeg, GPU, or driver cannot use it.",
     "Task Folder Template": "Task Folder Template",
-    "Template variables: {{task_id}}, {{datetime}}, {{date}}, {{time}}, {{model_name}}, {{video_subject}}": "Template variables: {{task_id}}, {{datetime}}, {{date}}, {{time}}, {{model_name}}, {{video_subject}}"
+    "Template variables: {{task_id}}, {{datetime}}, {{date}}, {{time}}, {{model_name}}, {{video_subject}}": "Template variables: {{task_id}}, {{datetime}}, {{date}}, {{time}}, {{model_name}}, {{video_subject}}",
+    "Timezone": "Timezone",
+    "Timezone for task folder name (e.g. Asia/Tokyo, UTC)": "Timezone for task folder name (e.g. Asia/Tokyo, UTC)",
+    "Video Source": "Video Source",
+    "Custom Background Video": "Custom Background Video (Local)",
+    "No background videos found in resource/bg_videos": "No background videos found in resource/bg_videos",
+    "Select Background Video": "Select Background Video"
   }
 }

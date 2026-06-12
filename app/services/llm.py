@@ -608,6 +608,7 @@ def build_script_prompt(
     paragraph_number: int = 1,
     video_script_prompt: str = "",
     custom_system_prompt: str = "",
+    video_title: str = "",
 ) -> str:
     paragraph_number = _normalize_script_paragraph_number(paragraph_number)
     video_script_prompt = _limit_script_text(
@@ -623,15 +624,16 @@ def build_script_prompt(
     prompt += f"""
 
 # Initialization:
-- video subject: {video_subject}
-- number of paragraphs: {paragraph_number}
-""".rstrip()
+- video subject: {video_subject}"""
+    if video_title:
+        prompt += f"\n- video title: {video_title}"
+    prompt += f"\n- number of paragraphs: {paragraph_number}"
     if language:
         prompt += f"\n- language: {language}"
     if video_script_prompt:
         prompt += f"""
 
-# Additional User Requirements:
+# Additional User Requirements (You must strictly follow these instructions):
 {video_script_prompt}
 """.rstrip()
 
@@ -644,6 +646,7 @@ def generate_script(
     paragraph_number: int = 1,
     video_script_prompt: str = "",
     custom_system_prompt: str = "",
+    video_title: str = "",
 ) -> str:
     paragraph_number = _normalize_script_paragraph_number(paragraph_number)
     video_script_prompt = _limit_script_text(
@@ -658,11 +661,12 @@ def generate_script(
         paragraph_number=paragraph_number,
         video_script_prompt=video_script_prompt,
         custom_system_prompt=custom_system_prompt,
+        video_title=video_title,
     )
     final_script = ""
     logger.info(
         "generating video script: "
-        f"subject={video_subject}, paragraph_number={paragraph_number}, "
+        f"subject={video_subject}, video_title='{video_title}', paragraph_number={paragraph_number}, "
         f"has_custom_prompt={bool(video_script_prompt.strip())}, "
         f"has_custom_system_prompt={bool(custom_system_prompt.strip())}"
     )
@@ -771,12 +775,12 @@ def generate_terms(
 ## Goals:
 {goal}
 
-## Constrains:
-1. the search terms are to be returned as a json-array of strings.
-2. each search term should consist of 1-3 words, always add the main subject of the video.
-3. you must only return the json-array of strings. you must not return anything else. you must not return the script.
-4. the search terms must be related to the subject of the video.
-5. reply with english search terms only.
+## Constraints:
+1. The search terms must be returned as a json-array of strings.
+2. Each search term should consist of 1-3 words. Do not just repeat the video subject; instead, focus on the concrete actions, visual elements, metaphors, and emotional expressions appearing in the video script to help find matching stock footage.
+3. You must only return the json-array of strings. You must not return anything else. You must not return the script.
+4. The search terms must be closely related to the visual moments, scenes, and metaphors described in the video script.
+5. Reply with english search terms only.
 {ordering_rule}
 
 ## Output Example:
@@ -1162,6 +1166,40 @@ Use three distinct color tags:
         except Exception as e:
             logger.error(f"failed to highlight script: {e}")
     return highlighted if highlighted else script
+
+
+def highlight_title_with_llm(title: str) -> str:
+    prompt = f"""
+# Role: Video Title Highlighter
+
+## Goals:
+Markup the provided short video title to highlight key terms and make it visually engaging.
+Use three distinct color tags:
+- `<color1>...</color1>` for core keywords, most important concepts or visual anchors.
+- `<color2>...</color2>` for secondary important words, numbers, or action verbs.
+- `<color3>...</color3>` for key emotional words, adjectives, or attention-grabbing phrases.
+
+## Constraints:
+1. Do NOT change any words of the title itself. Only insert the opening and closing tags.
+2. Ensure tags are properly closed and nested correctly.
+3. Return only the marked-up title. Do not include markdown code fences or any conversational filler.
+4. Keep it minimal; a short title should only have 1 or 2 highlighted parts.
+
+## Video Title:
+{title}
+""".strip()
+
+    logger.info("highlighting video title with llm")
+    highlighted = ""
+    for i in range(_max_retries):
+        try:
+            response = _generate_response(prompt=prompt)
+            if response and "Error: " not in response:
+                highlighted = response.replace("```xml", "").replace("```html", "").replace("```", "").strip()
+                break
+        except Exception as e:
+            logger.error(f"failed to highlight title: {e}")
+    return highlighted if highlighted else title
 
 
 if __name__ == "__main__":

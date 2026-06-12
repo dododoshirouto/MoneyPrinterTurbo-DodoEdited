@@ -23,6 +23,16 @@ def __init_logger():
         record["file"].path = f"./{relative_path}"
         # 返回修改后的格式字符串
         # 您可以根据需要调整这里的格式
+
+        # タイムゾーン変換: config.app の timezone 設定に基づいてログ時刻を変換
+        try:
+            from zoneinfo import ZoneInfo
+            tz_name = config.app.get("timezone", "Asia/Tokyo") or "Asia/Tokyo"
+            tz = ZoneInfo(tz_name)
+            local_time = record["time"].astimezone(tz)
+        except Exception:
+            local_time = record["time"]
+
         _format = (
             "<green>{time:%Y-%m-%d %H:%M:%S}</> | "
             + "<level>{level}</> | "
@@ -30,6 +40,7 @@ def __init_logger():
             + "- <level>{message}</>"
             + "\n"
         )
+        record["time"] = local_time
         return _format
 
     logger.remove()

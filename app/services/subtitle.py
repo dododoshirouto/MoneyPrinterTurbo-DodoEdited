@@ -292,6 +292,66 @@ def correct(subtitle_file, video_script):
         logger.success("Subtitle is correct")
 
 
+def _hmsm_to_seconds(hmsm: str) -> float:
+    """HH:MM:SS,mmm 形式の SRT タイムスタンプを秒数（float）に変換する。"""
+    hmsm = hmsm.strip()
+    parts = hmsm.replace(",", ".").split(":")
+    h = int(parts[0])
+    m = int(parts[1])
+    s = float(parts[2])
+    return h * 3600 + m * 60 + s
+
+
+def _seconds_to_hmsm(seconds: float) -> str:
+    """秒数（float）を HH:MM:SS,mmm 形式の SRT タイムスタンプに変換する。"""
+    if seconds < 0:
+        seconds = 0.0
+    hours = int(seconds // 3600)
+    remainder = seconds % 3600
+    minutes = int(remainder // 60)
+    secs = remainder % 60
+    milliseconds = round((secs - int(secs)) * 1000)
+    secs = int(secs)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{milliseconds:03d}"
+
+
+def shift_timestamps(subtitle_file: str, offset_seconds: float) -> None:
+    """
+    SRT ファイルの全タイムスタンプに offset_seconds 秒を加算（負値で前倒し）して上書き保存する。
+
+    Args:
+        subtitle_file: SRT ファイルのパス
+        offset_seconds: シフトする秒数。正で遅延、負で前倒し。0.0 の場合は何もしない。
+    """
+    if offset_seconds == 0.0:
+        return
+    if not os.path.isfile(subtitle_file):
+        logger.warning(f"shift_timestamps: file not found: {subtitle_file}")
+        return
+
+    logger.info(f"shifting subtitle timestamps by {offset_seconds:+.3f}s: {subtitle_file}")
+
+    with open(subtitle_file, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # HH:MM:SS,mmm --> HH:MM:SS,mmm パターンを一括置換する
+    timestamp_pattern = re.compile(
+        r"(\d{2}:\d{2}:\d{2},\d{3})\s+-->\s+(\d{2}:\d{2}:\d{2},\d{3})"
+    )
+
+    def shift_match(m: re.Match) -> str:
+        start = _hmsm_to_seconds(m.group(1)) + offset_seconds
+        end = _hmsm_to_seconds(m.group(2)) + offset_seconds
+        return f"{_seconds_to_hmsm(start)} --> {_seconds_to_hmsm(end)}"
+
+    new_content = timestamp_pattern.sub(shift_match, content)
+
+    with open(subtitle_file, "w", encoding="utf-8") as f:
+        f.write(new_content)
+
+    logger.info("subtitle timestamps shifted successfully")
+
+
 if __name__ == "__main__":
     task_id = "c12fd1e6-4b0a-4d65-a075-c87abe35a072"
     task_dir = utils.task_dir(task_id)

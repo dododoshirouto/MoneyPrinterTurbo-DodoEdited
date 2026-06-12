@@ -17,12 +17,20 @@ def generate_script(task_id, params):
     logger.info("\n\n## generating video script")
     video_script = params.video_script.strip()
     if not video_script:
+        title_to_send = ""
+        if getattr(params, "use_title_in_script", True) and getattr(params, "video_title", ""):
+            title_to_send = re.sub(r'</?color[1-3]>', '', params.video_title).strip()
+            logger.info(f"generating script *with* video title context: '{title_to_send}'")
+        else:
+            logger.info("generating script *without* video title context")
+
         video_script = llm.generate_script(
             video_subject=params.video_subject,
             language=params.video_language,
             paragraph_number=params.paragraph_number,
             video_script_prompt=params.video_script_prompt,
             custom_system_prompt=params.custom_system_prompt,
+            video_title=title_to_send,
         )
     else:
         logger.debug(f"video script: \n{video_script}")
@@ -166,6 +174,11 @@ def generate_subtitle(task_id, params, video_script, sub_maker, audio_file):
         logger.warning(f"subtitle file is invalid: {subtitle_path}")
         return ""
 
+    # 字幕タイムシフト処理 (音声再生との同期用オフセット)
+    subtitle_offset = getattr(params, "subtitle_offset", 0.0) or 0.0
+    if subtitle_offset != 0.0:
+        subtitle.shift_timestamps(subtitle_path, subtitle_offset)
+
     return subtitle_path
 
 
@@ -227,6 +240,46 @@ def generate_final_videos(
     _progress = 50
     for i in range(params.video_count):
         index = i + 1
+        
+        # 背景動画の処理
+        bg_video_file_to_use = ""
+        bg_video_type = getattr(params, "bg_video_type", "none")
+        if bg_video_type == "source":
+            bg_dir = path.join(utils.task_dir(task_id), f"bg-{index}")
+            os.makedirs(bg_dir, exist_ok=True)
+            logger.info(f"downloading background video to {bg_dir}")
+            
+            video_terms = params.video_terms
+            if isinstance(video_terms, str):
+                video_terms_list = [term.strip() for term in re.split(r"[,，]", video_terms)]
+            elif isinstance(video_terms, list):
+                video_terms_list = [term.strip() for term in video_terms]
+            else:
+                video_terms_list = [params.video_subject]
+            
+            # 1本だけダウンロードすればよいので、要求時間を1クリップの最大時間に設定する
+            bg_downloaded = material.download_videos(
+                task_id=f"{task_id}-bg",
+                search_terms=video_terms_list,
+                source=params.video_source,
+                video_aspect=params.video_aspect,
+                video_concat_mode=VideoConcatMode.random,
+                audio_duration=params.video_clip_duration,
+                max_clip_duration=params.video_clip_duration,
+                material_directory=bg_dir,
+            )
+            if bg_downloaded:
+                # 最初の1本をそのまま背景動画として使用する
+                bg_video_file_to_use = bg_downloaded[0]
+        elif bg_video_type == "custom":
+            custom_bg_name = getattr(params, "bg_video_file", "")
+            if custom_bg_name:
+                full_path = path.join(utils.resource_dir("bg_videos"), custom_bg_name)
+                if path.exists(full_path):
+                    bg_video_file_to_use = full_path
+                elif path.exists(custom_bg_name):
+                    bg_video_file_to_use = custom_bg_name
+
         combined_video_path = path.join(
             utils.task_dir(task_id), f"combined-{index}.mp4"
         )
@@ -250,12 +303,16 @@ def generate_final_videos(
         final_video_path = path.join(utils.task_dir(task_id), f"final-{index}.mp4")
 
         logger.info(f"\n\n## generating video: {index} => {final_video_path}")
+        
+        params_copy = params.model_copy()
+        params_copy.bg_video_file = bg_video_file_to_use
+        
         video.generate_video(
             video_path=combined_video_path,
             audio_path=audio_file,
             subtitle_path=subtitle_path,
             output_file=final_video_path,
-            params=params,
+            params=params_copy,
         )
 
         _progress += 50 / params.video_count / 2

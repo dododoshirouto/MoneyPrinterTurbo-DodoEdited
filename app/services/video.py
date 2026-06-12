@@ -802,10 +802,10 @@ def wrap_text(text, max_width, font="Arial", fontsize=60):
 
 
 def get_bg_video_file(bg_video_type: str, bg_video_file: str) -> str:
-    if bg_video_type == "custom":
+    if bg_video_type in ["custom", "source"]:
         if bg_video_file and os.path.exists(bg_video_file):
             return bg_video_file
-        logger.warning(f"custom bg video file not found: {bg_video_file}")
+        logger.warning(f"{bg_video_type} bg video file not found: {bg_video_file}")
         return ""
 
     if bg_video_type == "random":
@@ -1036,7 +1036,7 @@ def generate_video(
         try:
             logger.info(f"applying 2-layer background synthesis: {bg_file}")
             bg_clip = _open_video_clip_quietly(bg_file)
-            bg_clip = bg_clip.with_effects([vfx.loop(duration=video_clip.duration)])
+            bg_clip = bg_clip.with_effects([vfx.Loop(duration=video_clip.duration)])
             
             bg_w, bg_h = bg_clip.size
             if bg_w != video_width or bg_h != video_height:
@@ -1096,36 +1096,62 @@ def generate_video(
             title_max_width = int(video_width * (1.0 - 2 * margin_x_ratio))
             title_font_size = int(params.font_size * 1.2)
             
-            wrapped_title, title_height = wrap_text(
-                video_title,
+            segments = parse_markup(video_title)
+            plain_title = "".join(text for text, _ in segments)
+            
+            wrapped_plain, title_height = wrap_text(
+                plain_title,
                 max_width=title_max_width,
                 font=font_path,
                 fontsize=title_font_size,
             )
             
-            title_lines = wrapped_title.split("\n")
+            title_lines_segs = split_segments_by_lines(segments, wrapped_plain)
+            
             title_interline = int(title_font_size * 0.25)
             title_vertical_padding = 10
-            title_img_height = int(title_height + 2 * title_vertical_padding + (title_interline * (len(title_lines) - 1)))
-            
+            title_img_height = int(title_height + 2 * title_vertical_padding + (title_interline * (len(title_lines_segs) - 1)))
+            if title_img_height <= 0:
+                title_img_height = title_font_size + 2 * title_vertical_padding
+                
             title_pil = Image.new("RGBA", (title_max_width, title_img_height), (0, 0, 0, 0))
             title_draw = ImageDraw.Draw(title_pil)
             title_font = ImageFont.truetype(font_path, title_font_size)
             
-            for idx, line in enumerate(title_lines):
-                line_w = title_font.getlength(line)
+            line_widths = []
+            for line_segs in title_lines_segs:
+                w = 0
+                for text, _ in line_segs:
+                    w += title_font.getlength(text)
+                line_widths.append(w)
+                
+            for idx, line_segs in enumerate(title_lines_segs):
+                line_w = line_widths[idx]
                 x = (title_max_width - line_w) / 2
                 y = title_vertical_padding + idx * (title_font_size + title_interline)
                 
-                title_draw.text(
-                    (x, y),
-                    line,
-                    font=title_font,
-                    fill=params.text_fore_color or "#FFFFFF",
-                    stroke_width=int(params.stroke_width) if params.stroke_width is not None else 1,
-                    stroke_fill=params.stroke_color or "#000000"
-                )
-                
+                for text, style in line_segs:
+                    fore_color = params.text_fore_color or "#FFFFFF"
+                    stroke_color = params.stroke_color or "#000000"
+                    stroke_width = int(params.stroke_width) if params.stroke_width is not None else 1
+                    
+                    if getattr(params, "text_color_highlight_enabled", False) and style:
+                        if style == "color1":
+                            fore_color = getattr(params, "color1_fore", "#FF3B30")
+                            stroke_color = getattr(params, "color1_stroke", "#000000")
+                            stroke_width = int(getattr(params, "color1_stroke_width", 1.5))
+                        elif style == "color2":
+                            fore_color = getattr(params, "color2_fore", "#007AFF")
+                            stroke_color = getattr(params, "color2_stroke", "#FFFFFF")
+                            stroke_width = int(getattr(params, "color2_stroke_width", 1.5))
+                        elif style == "color3":
+                            fore_color = getattr(params, "color3_fore", "#FFCC00")
+                            stroke_color = getattr(params, "color3_stroke", "#000000")
+                            stroke_width = int(getattr(params, "color3_stroke_width", 1.5))
+                            
+                    title_draw.text((x, y), text, font=title_font, fill=fore_color, stroke_width=stroke_width, stroke_fill=stroke_color)
+                    x += title_font.getlength(text)
+                    
             title_clip = ImageClip(np.array(title_pil), transparent=True)
             title_clip = title_clip.with_duration(video_clip.duration).with_position(("center", video_height * margin_y_ratio))
             text_clips.append(title_clip)
