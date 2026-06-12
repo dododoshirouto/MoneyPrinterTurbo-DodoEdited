@@ -313,6 +313,42 @@ with preset_cols[2]:
     # プリセット保存ボタン
     if save_col.button(tr("Save Preset"), use_container_width=True):
         if new_preset_name.strip():
+            # プリセット保存直前にWidgetから最新値を同期
+            if "paragraph_number_input" in st.session_state:
+                config.app["paragraph_number"] = st.session_state["paragraph_number_input"]
+            if "video_script_prompt" in st.session_state:
+                config.app["video_script_prompt"] = st.session_state["video_script_prompt"].strip()
+            if "custom_system_prompt" in st.session_state:
+                config.app["custom_system_prompt"] = st.session_state["custom_system_prompt"].strip()
+            if "use_custom_system_prompt" in st.session_state:
+                config.app["use_custom_system_prompt"] = st.session_state["use_custom_system_prompt"]
+            
+            if "video_concat_mode" in st.session_state:
+                config.app["video_concat_mode"] = st.session_state["video_concat_mode"]
+            if "video_transition_mode" in st.session_state:
+                config.app["video_transition_mode"] = st.session_state["video_transition_mode"]
+            if "video_aspect" in st.session_state:
+                config.app["video_aspect"] = st.session_state["video_aspect"]
+            if "video_clip_duration" in st.session_state:
+                config.app["video_clip_duration"] = st.session_state["video_clip_duration"]
+            if "video_count" in st.session_state:
+                config.app["video_count"] = st.session_state["video_count"]
+            
+            if "voice_volume" in st.session_state:
+                config.app["voice_volume"] = st.session_state["voice_volume"]
+            if "voice_rate" in st.session_state:
+                config.app["voice_rate"] = st.session_state["voice_rate"]
+            if "bgm_type" in st.session_state:
+                config.app["bgm_type"] = st.session_state["bgm_type"]
+            if "bgm_volume" in st.session_state:
+                config.app["bgm_volume"] = st.session_state["bgm_volume"]
+            if "subtitle_enabled" in st.session_state:
+                config.app["subtitle_enabled"] = st.session_state["subtitle_enabled"]
+            if "stroke_color" in st.session_state:
+                config.ui["stroke_color"] = st.session_state["stroke_color"]
+            if "stroke_width" in st.session_state:
+                config.ui["stroke_width"] = st.session_state["stroke_width"]
+
             preset_data = {}
             app_keys = [
                 "llm_provider", "video_source", "video_concat_mode", "video_clip_fit",
@@ -321,7 +357,7 @@ with preset_cols[2]:
                 "subtitle_enabled", "font_name", "text_fore_color", "text_background_color",
                 "rounded_subtitle_background", "font_size", "stroke_color", "stroke_width",
                 "n_threads", "paragraph_number", "video_script_prompt", "custom_system_prompt",
-                "task_folder_template"
+                "task_folder_template", "video_transition_mode", "video_aspect", "use_custom_system_prompt"
             ]
             for provider in ["openai", "aihubmix", "aimlapi", "moonshot", "azure", "qwen", "deepseek", "modelscope", "gemini", "grok", "groq", "ollama", "llmcpp", "g4f", "oneapi", "cloudflare", "ernie", "minimax", "mimo", "pollinations", "litellm"]:
                 app_keys.append(f"{provider}_model_name")
@@ -342,7 +378,7 @@ with preset_cols[2]:
                 "text_color_highlight_enabled", "color1_fore", "color1_stroke",
                 "color1_stroke_width", "color2_fore", "color2_stroke",
                 "color2_stroke_width", "color3_fore", "color3_stroke",
-                "color3_stroke_width"
+                "color3_stroke_width", "tts_server", "subtitle_background_enabled"
             ]
             preset_data["ui"] = {}
             for k in ui_keys:
@@ -1028,19 +1064,19 @@ with middle_panel:
                 accept_multiple_files=True,
             )
 
+        saved_concat_mode = config.app.get("video_concat_mode", "random")
+        saved_concat_index = 0 if saved_concat_mode == "sequential" else 1
         selected_index = st.selectbox(
             tr("Video Concat Mode"),
-            index=1,
-            options=range(
-                len(video_concat_modes)
-            ),  # Use the index as the internal option value
-            format_func=lambda x: video_concat_modes[x][
-                0
-            ],  # The label is displayed to the user
+            index=saved_concat_index,
+            options=range(len(video_concat_modes)),
+            format_func=lambda x: video_concat_modes[x][0],
+            key="video_concat_mode",
         )
         params.video_concat_mode = VideoConcatMode(
             video_concat_modes[selected_index][1]
         )
+        config.app["video_concat_mode"] = params.video_concat_mode.value
 
         # 视频转场模式
         video_transition_modes = [
@@ -1051,39 +1087,45 @@ with middle_panel:
             (tr("SlideIn"), VideoTransitionMode.slide_in.value),
             (tr("SlideOut"), VideoTransitionMode.slide_out.value),
         ]
+        saved_transition_mode = config.app.get("video_transition_mode", None)
+        saved_transition_index = 0
+        for i, (_, mode_val) in enumerate(video_transition_modes):
+            if mode_val == saved_transition_mode:
+                saved_transition_index = i
+                break
         selected_index = st.selectbox(
             tr("Video Transition Mode"),
             options=range(len(video_transition_modes)),
             format_func=lambda x: video_transition_modes[x][0],
-            index=0,
+            index=saved_transition_index,
+            key="video_transition_mode",
         )
         params.video_transition_mode = VideoTransitionMode(
             video_transition_modes[selected_index][1]
         )
+        config.app["video_transition_mode"] = params.video_transition_mode.value if params.video_transition_mode else None
 
         video_aspect_ratios = [
             (tr("Portrait"), VideoAspect.portrait.value),
             (tr("Landscape"), VideoAspect.landscape.value),
         ]
         # Coverr 库 99% 是 16:9 横屏,默认竖屏会让画面被大量黑边包围。
-        # 用 source-specific widget key 让每个 source 各自记忆 aspect 选择:
-        #   - 首次切到 coverr → 默认 Landscape(index=1)
-        #   - 其他 source 沿用 Portrait(index=0)
-        #   - 用户在某 source 下手动改过 aspect,session_state 会记住,
-        #     下次回到同一 source 时尊重用户选择,不会再被强制覆盖。
-        default_aspect_index = 1 if params.video_source == "coverr" else 0
+        # プリセットアスペクトを優先し、無ければデフォルトインデックスを計算
+        saved_aspect = config.app.get("video_aspect", VideoAspect.portrait.value)
+        aspect_values = [v[1] for v in video_aspect_ratios]
+        if saved_aspect in aspect_values:
+            default_aspect_index = aspect_values.index(saved_aspect)
+        else:
+            default_aspect_index = 1 if params.video_source == "coverr" else 0
         selected_index = st.selectbox(
             tr("Video Ratio"),
-            options=range(
-                len(video_aspect_ratios)
-            ),  # Use the index as the internal option value
-            format_func=lambda x: video_aspect_ratios[x][
-                0
-            ],  # The label is displayed to the user
+            options=range(len(video_aspect_ratios)),
+            format_func=lambda x: video_aspect_ratios[x][0],
             index=default_aspect_index,
-            key=f"video_aspect_for_{params.video_source}",
+            key="video_aspect",
         )
         params.video_aspect = VideoAspect(video_aspect_ratios[selected_index][1])
+        config.app["video_aspect"] = params.video_aspect.value
 
         # Video clip fit mode: contain or cover
         video_clip_fits = [
@@ -1102,14 +1144,27 @@ with middle_panel:
         params.video_clip_fit = video_clip_fits[selected_index][1]
         config.app["video_clip_fit"] = params.video_clip_fit
 
+        saved_duration = config.app.get("video_clip_duration", 5)
+        options = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+        saved_duration_index = options.index(saved_duration) if saved_duration in options else 1
         params.video_clip_duration = st.selectbox(
-            tr("Clip Duration"), options=[2, 3, 4, 5, 6, 7, 8, 9, 10], index=1
+            tr("Clip Duration"),
+            options=options,
+            index=saved_duration_index,
+            key="video_clip_duration",
         )
+        config.app["video_clip_duration"] = params.video_clip_duration
+
+        saved_count = config.app.get("video_count", 1)
+        count_options = [1, 2, 3, 4, 5]
+        saved_count_index = count_options.index(saved_count) if saved_count in count_options else 0
         params.video_count = st.selectbox(
             tr("Number of Videos Generated Simultaneously"),
-            options=[1, 2, 3, 4, 5],
-            index=0,
+            options=count_options,
+            index=saved_count_index,
+            key="video_count",
         )
+        config.app["video_count"] = params.video_count
 
         with st.expander(tr("Advanced Video Settings"), expanded=False):
             # 默认关闭，避免影响老用户的随机素材体验。开启后只改变关键词和素材
@@ -1426,17 +1481,27 @@ with middle_panel:
 
             config.app["mimo_api_key"] = mimo_api_key
 
+        saved_voice_volume = config.app.get("voice_volume", 1.0)
+        voice_volume_options = [0.6, 0.8, 1.0, 1.2, 1.5, 2.0, 3.0, 4.0, 5.0]
+        saved_volume_index = voice_volume_options.index(saved_voice_volume) if saved_voice_volume in voice_volume_options else 2
         params.voice_volume = st.selectbox(
             tr("Speech Volume"),
-            options=[0.6, 0.8, 1.0, 1.2, 1.5, 2.0, 3.0, 4.0, 5.0],
-            index=2,
+            options=voice_volume_options,
+            index=saved_volume_index,
+            key="voice_volume",
         )
+        config.app["voice_volume"] = params.voice_volume
 
+        saved_voice_rate = config.app.get("voice_rate", 1.0)
+        voice_rate_options = [0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.5, 1.8, 2.0]
+        saved_rate_index = voice_rate_options.index(saved_voice_rate) if saved_voice_rate in voice_rate_options else 2
         params.voice_rate = st.selectbox(
             tr("Speech Rate"),
-            options=[0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.5, 1.8, 2.0],
-            index=2,
+            options=voice_rate_options,
+            index=saved_rate_index,
+            key="voice_rate",
         )
+        config.app["voice_rate"] = params.voice_rate
 
         custom_audio_file_types = ["mp3", "wav", "m4a", "aac", "flac", "ogg"]
         uploaded_audio_file = st.file_uploader(
@@ -1459,18 +1524,19 @@ with middle_panel:
             (tr("Random Background Music"), "random"),
             (tr("Custom Background Music"), "custom"),
         ]
+        saved_bgm_type = config.app.get("bgm_type", "random")
+        bgm_values = [b[1] for b in bgm_options]
+        saved_bgm_index = bgm_values.index(saved_bgm_type) if saved_bgm_type in bgm_values else 1
         selected_index = st.selectbox(
             tr("Background Music"),
-            index=1,
-            options=range(
-                len(bgm_options)
-            ),  # Use the index as the internal option value
-            format_func=lambda x: bgm_options[x][
-                0
-            ],  # The label is displayed to the user
+            index=saved_bgm_index,
+            options=range(len(bgm_options)),
+            format_func=lambda x: bgm_options[x][0],
+            key="bgm_type",
         )
         # Get the selected background music type
         params.bgm_type = bgm_options[selected_index][1]
+        config.app["bgm_type"] = params.bgm_type
 
         # Show or hide components based on the selection
         if params.bgm_type == "custom":
@@ -1479,20 +1545,31 @@ with middle_panel:
             )
             if custom_bgm_file:
                 # 这里不直接用 os.path.exists 判断，因为用户常见输入是
-                # output000.mp3，这个文件名需要由服务层映射到 resource/songs
+                # output000.mp3，这个文件名需要由服务层映射 to resource/songs
                 # 目录后再校验。服务层会统一限制目录和文件类型，避免任意路径读取。
                 params.bgm_file = custom_bgm_file.strip()
                 # st.write(f":red[已选择自定义背景音乐]：**{custom_bgm_file}**")
+        saved_bgm_volume = config.app.get("bgm_volume", 0.2)
+        bgm_vol_options = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+        saved_bgm_vol_index = bgm_vol_options.index(saved_bgm_volume) if saved_bgm_volume in bgm_vol_options else 2
         params.bgm_volume = st.selectbox(
             tr("Background Music Volume"),
-            options=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
-            index=2,
+            options=bgm_vol_options,
+            index=saved_bgm_vol_index,
+            key="bgm_volume",
         )
+        config.app["bgm_volume"] = params.bgm_volume
 
 with right_panel:
     with st.container(border=True):
         st.write(tr("Subtitle Settings"))
-        params.subtitle_enabled = st.checkbox(tr("Enable Subtitles"), value=True)
+        saved_subtitle_enabled = config.app.get("subtitle_enabled", True)
+        params.subtitle_enabled = st.checkbox(
+            tr("Enable Subtitles"),
+            value=saved_subtitle_enabled,
+            key="subtitle_enabled",
+        )
+        config.app["subtitle_enabled"] = params.subtitle_enabled
         font_names = get_all_fonts()
         saved_font_name = config.ui.get("font_name", "MicrosoftYaHeiBold.ttc")
         saved_font_name_index = 0
@@ -1554,10 +1631,24 @@ with right_panel:
             config.ui["font_size"] = params.font_size
 
         stroke_cols = st.columns([0.3, 0.7])
+        saved_stroke_color = config.ui.get("stroke_color", "#000000")
+        saved_stroke_width = config.ui.get("stroke_width", 1.5)
         with stroke_cols[0]:
-            params.stroke_color = st.color_picker(tr("Stroke Color"), "#000000")
+            params.stroke_color = st.color_picker(
+                tr("Stroke Color"),
+                saved_stroke_color,
+                key="stroke_color",
+            )
+            config.ui["stroke_color"] = params.stroke_color
         with stroke_cols[1]:
-            params.stroke_width = st.slider(tr("Stroke Width"), 0.0, 10.0, 1.5)
+            params.stroke_width = st.slider(
+                tr("Stroke Width"),
+                0.0,
+                10.0,
+                saved_stroke_width,
+                key="stroke_width",
+            )
+            config.ui["stroke_width"] = params.stroke_width
 
         subtitle_bg_cols = st.columns([0.4, 0.6])
         saved_subtitle_background_enabled = config.ui.get(

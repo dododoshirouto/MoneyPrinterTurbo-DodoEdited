@@ -26,3 +26,10 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: always
+  voicevox:
+    image: voicevox/voicevox_engine:cpu-ubuntu20.04-latest
+    container_name: "moneyprinterturbo-voicevox"
+    ports:
+      - "127.0.0.1:50021:50021"
+    restart: always
+
