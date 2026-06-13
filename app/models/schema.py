@@ -53,6 +53,7 @@ class MaterialInfo:
     provider: str = "pexels"
     url: str = ""
     duration: int = 0
+    tags: list = pydantic.dataclasses.field(default_factory=list)
 
 
 class VideoParams(BaseModel):

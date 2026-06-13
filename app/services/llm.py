@@ -12,6 +12,19 @@ from app.config import config
 from app.utils import utils
 
 _max_retries = 5
+_LLMCPP_MODEL_HISTORY_KEY = "llmcpp_model_history"
+_LLMCPP_MODEL_HISTORY_MAX = 20
+
+
+def _record_llmcpp_model_success(model_name: str):
+    if not model_name:
+        return
+    history: list = list(config.app.get(_LLMCPP_MODEL_HISTORY_KEY, []) or [])
+    if model_name in history:
+        history.remove(model_name)
+    history.insert(0, model_name)
+    config.app[_LLMCPP_MODEL_HISTORY_KEY] = history[:_LLMCPP_MODEL_HISTORY_MAX]
+    config.save_config()
 _DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 _DEPRECATED_GEMINI_MODELS = {"gemini-pro", "gemini-1.0-pro"}
 MIN_SCRIPT_PARAGRAPH_NUMBER = 1
@@ -554,7 +567,10 @@ def _generate_response(prompt: str) -> str:
             )
             if response:
                 if isinstance(response, ChatCompletion):
-                    return _extract_chat_completion_text(response, llm_provider)
+                    result = _extract_chat_completion_text(response, llm_provider)
+                    if llm_provider == "llmcpp" and model_name:
+                        _record_llmcpp_model_success(model_name)
+                    return result
                 else:
                     raise Exception(
                         f'[{llm_provider}] returned an invalid response: "{response}", please check your network '
@@ -565,6 +581,8 @@ def _generate_response(prompt: str) -> str:
                     f"[{llm_provider}] returned an empty response, please check your network connection and try again."
                 )
 
+        if llm_provider == "llmcpp" and model_name and content:
+            _record_llmcpp_model_success(model_name)
         return _normalize_text_response(content, llm_provider)
     except Exception as e:
         return f"Error: {str(e)}"

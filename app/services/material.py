@@ -1,7 +1,8 @@
+import json
 import os
 import random
 import threading
-from typing import List
+from typing import List, Optional
 from urllib.parse import urlencode
 
 import requests
@@ -15,6 +16,54 @@ from app.utils import utils
 # Thread-safe counter for API key rotation
 _api_key_counter = 0
 _api_key_lock = threading.Lock()
+_cache_index_lock = threading.Lock()
+
+
+def _cache_index_path() -> str:
+    return os.path.join(utils.storage_dir("cache_videos"), "index.json")
+
+
+def _load_cache_index() -> dict:
+    path = _cache_index_path()
+    if not os.path.exists(path):
+        return {"videos": {}, "tag_index": {}}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"videos": {}, "tag_index": {}}
+
+
+def _save_cache_index(index: dict):
+    path = _cache_index_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, indent=2)
+
+
+def _record_video_in_cache(video_id: str, url: str, duration: float, tags: List[str], source: str):
+    with _cache_index_lock:
+        index = _load_cache_index()
+        index["videos"][video_id] = {"url": url, "duration": duration, "source": source, "tags": tags}
+        for tag in tags:
+            key = f"{source}::{tag.lower()}"
+            if key not in index["tag_index"]:
+                index["tag_index"][key] = []
+            if video_id not in index["tag_index"][key]:
+                index["tag_index"][key].append(video_id)
+        _save_cache_index(index)
+
+
+def _get_cached_video_paths(search_term: str, source: str, cache_dir: str) -> List[str]:
+    index = _load_cache_index()
+    key = f"{source}::{search_term.lower()}"
+    video_ids = index.get("tag_index", {}).get(key, [])
+    paths = []
+    for vid_id in video_ids:
+        path = os.path.join(cache_dir, f"{vid_id}.mp4")
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            paths.append(path)
+    return paths
 
 
 def _get_tls_verify() -> bool:
@@ -100,6 +149,8 @@ def search_videos_pexels(
                     item.provider = "pexels"
                     item.url = video["link"]
                     item.duration = duration
+                    raw_tags = v.get("tags", [])
+                    item.tags = [t.strip() for t in raw_tags if isinstance(t, str) and t.strip()]
                     video_items.append(item)
                     break
         return video_items
@@ -156,6 +207,8 @@ def search_videos_pixabay(
                     item.provider = "pixabay"
                     item.url = video["url"]
                     item.duration = duration
+                    raw_tags = v.get("tags", "")
+                    item.tags = [t.strip() for t in raw_tags.split(",") if t.strip()]
                     video_items.append(item)
                     break
         return video_items
@@ -241,7 +294,13 @@ def search_videos_coverr(
     return []
 
 
-def save_video(video_url: str, save_dir: str = "") -> str:
+def save_video(
+    video_url: str,
+    save_dir: str = "",
+    tags: Optional[List[str]] = None,
+    source: str = "",
+    item_duration: float = 0.0,
+) -> str:
     if not save_dir:
         save_dir = utils.storage_dir("cache_videos")
 
@@ -253,9 +312,11 @@ def save_video(video_url: str, save_dir: str = "") -> str:
     video_id = f"vid-{url_hash}"
     video_path = f"{save_dir}/{video_id}.mp4"
 
-    # if video already exists, return the path
+    # if video already exists, update index tags and return the path
     if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
         logger.info(f"video already exists: {video_path}")
+        if tags and source:
+            _record_video_in_cache(video_id, video_url, item_duration, tags, source)
         return video_path
 
     headers = {
@@ -281,6 +342,8 @@ def save_video(video_url: str, save_dir: str = "") -> str:
             duration = clip.duration
             fps = clip.fps
             if duration > 0 and fps > 0:
+                if tags and source:
+                    _record_video_in_cache(video_id, video_url, duration, tags, source)
                 return video_path
         except Exception as e:
             logger.warning(f"invalid video file: {video_path} => {str(e)}")
@@ -334,7 +397,38 @@ def download_videos(
             audio_duration=audio_duration,
             max_clip_duration=max_clip_duration,
             material_directory=material_directory,
+            source=source,
         )
+
+    cache_dir = utils.storage_dir("cache_videos")
+    video_paths = []
+    total_duration = 0.0
+
+    # キャッシュヒットした素材を先に使う
+    for search_term in search_terms:
+        cached_paths = _get_cached_video_paths(search_term, source, cache_dir)
+        if cached_paths:
+            logger.info(f"cache hit for '{search_term}': {len(cached_paths)} videos")
+            concat_mode_value = getattr(video_concat_mode, "value", video_concat_mode)
+            if concat_mode_value == VideoConcatMode.random.value:
+                random.shuffle(cached_paths)
+            for path in cached_paths:
+                video_paths.append(path)
+                try:
+                    clip = VideoFileClip(path)
+                    dur = clip.duration
+                    clip.close()
+                except Exception:
+                    dur = max_clip_duration
+                total_duration += min(max_clip_duration, dur)
+                if total_duration > audio_duration:
+                    break
+        if total_duration > audio_duration:
+            break
+
+    if total_duration > audio_duration:
+        logger.success(f"served {len(video_paths)} videos from cache")
+        return video_paths
 
     valid_video_items = []
     valid_video_urls = []
@@ -349,25 +443,28 @@ def download_videos(
 
         for item in video_items:
             if item.url not in valid_video_urls:
-                valid_video_items.append(item)
+                valid_video_items.append((search_term, item))
                 valid_video_urls.append(item.url)
                 found_duration += item.duration
 
     logger.info(
         f"found total videos: {len(valid_video_items)}, required duration: {audio_duration} seconds, found duration: {found_duration} seconds"
     )
-    video_paths = []
 
     concat_mode_value = getattr(video_concat_mode, "value", video_concat_mode)
     if concat_mode_value == VideoConcatMode.random.value:
         random.shuffle(valid_video_items)
 
-    total_duration = 0.0
-    for item in valid_video_items:
+    for search_term, item in valid_video_items:
         try:
             logger.info(f"downloading video: {item.url}")
+            all_tags = list({search_term} | {t for t in (item.tags or []) if t})
             saved_video_path = save_video(
-                video_url=item.url, save_dir=material_directory
+                video_url=item.url,
+                save_dir=material_directory,
+                tags=all_tags,
+                source=source,
+                item_duration=item.duration,
             )
             if saved_video_path:
                 logger.info(f"video saved: {saved_video_path}")
@@ -393,6 +490,7 @@ def _download_videos_by_script_order(
     audio_duration: float,
     max_clip_duration: int,
     material_directory: str,
+    source: str = "",
 ) -> List[str]:
     """
     按脚本文案顺序下载素材。
@@ -404,11 +502,37 @@ def _download_videos_by_script_order(
     这样在不重写视频合成引擎的前提下，尽量保证素材顺序贴近文案顺序。
     """
     logger.info("downloading videos with script-order material matching")
+    cache_dir = utils.storage_dir("cache_videos")
+
+    # キャッシュヒット済みの検索ワードは API 呼び出しをスキップ
+    video_paths = []
+    total_duration = 0.0
+    uncached_terms = []
+    for search_term in search_terms:
+        cached_paths = _get_cached_video_paths(search_term, source, cache_dir)
+        if cached_paths:
+            logger.info(f"cache hit for '{search_term}': {len(cached_paths)} videos")
+            for path in cached_paths:
+                video_paths.append(path)
+                try:
+                    clip = VideoFileClip(path)
+                    dur = clip.duration
+                    clip.close()
+                except Exception:
+                    dur = max_clip_duration
+                total_duration += min(max_clip_duration, dur)
+        else:
+            uncached_terms.append(search_term)
+
+    if total_duration > audio_duration:
+        logger.success(f"served {len(video_paths)} ordered videos from cache")
+        return video_paths
+
     candidate_groups = []
     valid_video_urls = set()
     found_duration = 0.0
 
-    for search_term in search_terms:
+    for search_term in uncached_terms:
         video_items = search_videos(
             search_term=search_term,
             minimum_duration=max_clip_duration,
@@ -432,8 +556,6 @@ def _download_videos_by_script_order(
         f"required duration: {audio_duration} seconds, found duration: {found_duration} seconds"
     )
 
-    video_paths = []
-    total_duration = 0.0
     candidate_index = 0
     while candidate_groups and total_duration <= audio_duration:
         has_candidate = False
@@ -447,8 +569,13 @@ def _download_videos_by_script_order(
                 logger.info(
                     f"downloading ordered video for '{search_term}': {item.url}"
                 )
+                all_tags = list({search_term} | {t for t in (item.tags or []) if t})
                 saved_video_path = save_video(
-                    video_url=item.url, save_dir=material_directory
+                    video_url=item.url,
+                    save_dir=material_directory,
+                    tags=all_tags,
+                    source=source,
+                    item_duration=item.duration,
                 )
                 if saved_video_path:
                     logger.info(f"video saved: {saved_video_path}")

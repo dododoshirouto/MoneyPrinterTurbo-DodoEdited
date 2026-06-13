@@ -307,7 +307,7 @@ def get_all_fonts():
     fonts = []
     for root, dirs, files in os.walk(font_dir):
         for file in files:
-            if file.endswith(".ttf") or file.endswith(".ttc"):
+            if file.endswith(".ttf") or file.endswith(".ttc") or file.endswith(".otf"):
                 fonts.append(file)
     fonts.sort()
     return fonts
@@ -912,6 +912,22 @@ if not config.app.get("hide_config", False):
                             st.caption(
                                 "Add a Groq API key to load available models automatically."
                             )
+                elif llm_provider == "llmcpp":
+                    st_llm_model_name = st.text_input(
+                        tr("Model Name"),
+                        value=llm_model_name,
+                        key="llmcpp_model_name_input",
+                    )
+                    llmcpp_history = list(config.app.get("llmcpp_model_history", []) or [])
+                    if llmcpp_history:
+                        selected_from_history = st.selectbox(
+                            tr("接続履歴から選択") if config.ui.get("language") == "ja" else "Select from history",
+                            options=[""] + llmcpp_history,
+                            index=0,
+                            key="llmcpp_model_history_select",
+                        )
+                        if selected_from_history:
+                            st_llm_model_name = selected_from_history
                 else:
                     st_llm_model_name = st.text_input(
                         tr("Model Name"),
