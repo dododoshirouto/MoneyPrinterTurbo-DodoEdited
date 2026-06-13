@@ -1,35 +1,52 @@
 x-common-volumes: &common-volumes
   - ./:/MoneyPrinterTurbo
 
+x-common-env: &common-env
+  IMAGEIO_FFMPEG_EXE: /usr/bin/ffmpeg
+
+x-gpu-device: &gpu-device
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: 1
+            capabilities: [gpu, video]
+
 services:
   webui:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: "moneyprinterturbo-webui"
+    runtime: nvidia
     ports:
       - "127.0.0.1:8501:8501"
     command: [ "streamlit", "run", "./webui/Main.py","--browser.serverAddress=127.0.0.1","--server.enableCORS=True","--browser.gatherUsageStats=False" ]
+    environment: *common-env
     volumes: *common-volumes
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: always
+    <<: *gpu-device
   api:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: "moneyprinterturbo-api"
+    runtime: nvidia
     ports:
       - "127.0.0.1:8080:8080"
     command: [ "python3", "main.py" ]
+    environment: *common-env
     volumes: *common-volumes
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: always
+    <<: *gpu-device
   voicevox:
     image: voicevox/voicevox_engine:cpu-ubuntu20.04-latest
     container_name: "moneyprinterturbo-voicevox"
     ports:
       - "127.0.0.1:50021:50021"
     restart: always
-

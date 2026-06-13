@@ -10,6 +10,7 @@ RUN chmod 777 /MoneyPrinterTurbo
 ENV PYTHONPATH="/MoneyPrinterTurbo"
 
 # Install system dependencies with domestic mirrors first for stability
+# ffmpegはapt版を使わずNVENC対応の静的ビルドを別途インストールする
 RUN echo "deb http://mirrors.aliyun.com/debian bullseye main" > /etc/apt/sources.list && \
     echo "deb http://mirrors.aliyun.com/debian-security bullseye-security main" >> /etc/apt/sources.list && \
     ( \
@@ -18,7 +19,8 @@ RUN echo "deb http://mirrors.aliyun.com/debian bullseye main" > /etc/apt/sources
             apt-get update && apt-get install -y --no-install-recommends \
                 git \
                 imagemagick \
-                ffmpeg && break || \
+                wget \
+                xz-utils && break || \
             echo "Attempt $i failed, retrying..."; \
             if [ $i -eq 3 ]; then \
                 echo "Aliyun mirror failed, switching to Tsinghua mirror"; \
@@ -28,7 +30,8 @@ RUN echo "deb http://mirrors.aliyun.com/debian bullseye main" > /etc/apt/sources
                     apt-get update && apt-get install -y --no-install-recommends \
                         git \
                         imagemagick \
-                        ffmpeg || \
+                        wget \
+                        xz-utils || \
                     ( \
                         echo "Tsinghua mirror failed, switching to default Debian mirror"; \
                         sed -i 's/mirrors.tuna.tsinghua.edu.cn/deb.debian.org/g' /etc/apt/sources.list && \
@@ -36,13 +39,24 @@ RUN echo "deb http://mirrors.aliyun.com/debian bullseye main" > /etc/apt/sources
                         apt-get update && apt-get install -y --no-install-recommends \
                             git \
                             imagemagick \
-                            ffmpeg; \
+                            wget \
+                            xz-utils; \
                     ); \
                 ); \
             fi; \
             sleep 5; \
         done \
     ) && rm -rf /var/lib/apt/lists/*
+
+# NVENC対応FFmpeg静的ビルドをインストール（h264_nvenc/hevc_nvenc含む）
+# 静的ビルドのため追加ライブラリ不要。NVENCはホスト側NVIDIAドライバを参照する。
+RUN wget -q https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz \
+    -O /tmp/ffmpeg.tar.xz && \
+    tar -xf /tmp/ffmpeg.tar.xz -C /tmp && \
+    mv /tmp/ffmpeg-master-latest-linux64-gpl/bin/ffmpeg /usr/local/bin/ffmpeg && \
+    mv /tmp/ffmpeg-master-latest-linux64-gpl/bin/ffprobe /usr/local/bin/ffprobe && \
+    chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && \
+    rm -rf /tmp/ffmpeg.tar.xz /tmp/ffmpeg-master-latest-linux64-gpl
 
 # Fix security policy for ImageMagick
 RUN sed -i '/<policy domain="path" rights="none" pattern="@\*"/d' /etc/ImageMagick-6/policy.xml
