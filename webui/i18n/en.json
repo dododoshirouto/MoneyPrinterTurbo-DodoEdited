@@ -170,6 +170,9 @@
     "Video Source": "Video Source",
     "Custom Background Video": "Custom Background Video (Local)",
     "No background videos found in resource/bg_videos": "No background videos found in resource/bg_videos",
-    "Select Background Video": "Select Background Video"
+    "Select Background Video": "Select Background Video",
+    "Source Background Video": "Source Background Video",
+    "GPU Device (CUDA_VISIBLE_DEVICES)": "GPU Device (CUDA_VISIBLE_DEVICES)",
+    "GPU Device Help": "Specify the NVIDIA GPU Device ID to use (e.g., 0 or 1, or 0,1 for multiple GPUs. Leave empty to use all GPUs)"
   }
 }

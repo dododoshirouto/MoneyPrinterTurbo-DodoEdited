@@ -1,6 +1,7 @@
 import os
 import sys
 import webbrowser
+import glob
 from uuid import UUID, uuid4
 
 import requests
@@ -16,6 +17,11 @@ if root_dir not in sys.path:
     print("")
 
 from app.config import config
+# Apply GPU settings as early as possible before loading other packages like torch/whisper
+cuda_device = config.app.get("cuda_device", "")
+if cuda_device:
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(cuda_device).strip()
+
 from app.models.schema import (
     MaterialInfo,
     VideoAspect,
@@ -57,6 +63,179 @@ song_dir = os.path.join(root_dir, "resource", "songs")
 i18n_dir = os.path.join(root_dir, "webui", "i18n")
 config_file = os.path.join(root_dir, "webui", ".streamlit", "webui.toml")
 system_locale = utils.get_system_locale()
+
+# ---------------------------------------------------------------------------
+# Preset registry – single source of truth for all saveable GUI fields.
+# Format: (config_key, config_store, session_state_key_or_None)
+#   config_key   : key used in config.app / config.ui
+#   config_store : "app" | "ui"
+#   session_key  : st.session_state key when the widget uses key=, else None
+#                  (None = keyless widget; controlled via config value/index)
+# ---------------------------------------------------------------------------
+_LLM_PROVIDERS_LIST = [
+    "openai", "aihubmix", "aimlapi", "moonshot", "azure", "qwen",
+    "deepseek", "modelscope", "gemini", "grok", "groq", "ollama",
+    "llmcpp", "g4f", "oneapi", "cloudflare", "ernie", "minimax",
+    "mimo", "pollinations", "litellm",
+]
+
+_PRESET_REGISTRY: list[tuple[str, str, str | None]] = [
+    # Video
+    ("llm_provider",                "app", None),
+    ("video_source",                "app", None),
+    ("video_concat_mode",           "app", "video_concat_mode"),
+    ("video_clip_fit",              "app", None),
+    ("video_clip_duration",         "app", "video_clip_duration"),
+    ("match_materials_to_script",   "app", "match_materials_to_script"),
+    ("video_count",                 "app", "video_count"),
+    ("video_transition_mode",       "app", "video_transition_mode"),
+    ("video_aspect",                "app", "video_aspect"),
+    # Script
+    ("paragraph_number",            "app", "paragraph_number_input"),
+    ("video_script_prompt",         "app", "video_script_prompt"),
+    ("custom_system_prompt",        "app", "custom_system_prompt"),
+    ("use_custom_system_prompt",    "app", "use_custom_system_prompt"),
+    ("task_folder_template",        "app", None),
+    ("use_title_in_script",         "app", "use_title_in_script"),
+    # Audio
+    ("voice_volume",                "app", "voice_volume"),
+    ("voice_rate",                  "app", "voice_rate"),
+    ("bgm_type",                    "app", "bgm_type"),
+    ("bgm_file",                    "app", None),
+    ("bgm_volume",                  "app", "bgm_volume"),
+    # Subtitle
+    ("subtitle_enabled",            "app", "subtitle_enabled"),
+    ("subtitle_offset",             "app", "subtitle_offset"),
+    ("n_threads",                   "app", None),
+    # System
+    ("voicevox_base_url",           "app", "voicevox_base_url_input"),
+    ("aivisspeech_base_url",        "app", "aivisspeech_base_url_input"),
+    ("timezone",                    "app", "timezone_input"),
+    ("cuda_device",                 "app", "cuda_device_input"),
+    # UI store – TTS / voice
+    ("tts_server",                  "ui",  None),
+    ("voice_name",                  "ui",  None),
+    # UI store – background video
+    # NOTE: bg_video_type is handled specially in _apply_preset_data because the
+    # selectbox stores an integer index in session_state, not the string value.
+    ("bg_video_type",               "ui",  None),
+    ("bg_video_file",               "ui",  "custom_bg_video_file_selectbox"),
+    # UI store – video display
+    ("video_margin_ratio",          "ui",  None),
+    # UI store – font / subtitle styling
+    ("font_name",                   "ui",  None),
+    ("text_fore_color",             "ui",  None),
+    ("font_size",                   "ui",  None),
+    ("stroke_color",                "ui",  "stroke_color"),
+    ("stroke_width",                "ui",  "stroke_width"),
+    ("subtitle_position",           "ui",  None),
+    ("custom_position",             "ui",  "custom_position_input"),
+    ("subtitle_background_enabled", "ui",  None),
+    ("subtitle_background_color",   "ui",  None),
+    ("rounded_subtitle_background", "ui",  None),
+    ("text_margin_x",               "ui",  None),
+    ("text_margin_y",               "ui",  None),
+    # UI store – color highlight
+    ("text_color_highlight_enabled","ui",  None),
+    ("color1_fore",                 "ui",  "color1_fore_picker"),
+    ("color1_stroke",               "ui",  "color1_stroke_picker"),
+    ("color1_stroke_width",         "ui",  "color1_stroke_width_slider"),
+    ("color2_fore",                 "ui",  "color2_fore_picker"),
+    ("color2_stroke",               "ui",  "color2_stroke_picker"),
+    ("color2_stroke_width",         "ui",  "color2_stroke_width_slider"),
+    ("color3_fore",                 "ui",  "color3_fore_picker"),
+    ("color3_stroke",               "ui",  "color3_stroke_picker"),
+    ("color3_stroke_width",         "ui",  "color3_stroke_width_slider"),
+]
+for _p in _LLM_PROVIDERS_LIST:
+    _PRESET_REGISTRY += [
+        (f"{_p}_model_name", "app", None),
+        (f"{_p}_api_key",    "app", None),
+        (f"{_p}_base_url",   "app", None),
+    ]
+_PRESET_REGISTRY += [
+    ("ernie_secret_key",      "app", None),
+    ("cloudflare_account_id", "app", None),
+]
+
+# Session-state keys owned by the preset system (auto-derived).
+_PRESET_SESSION_KEYS: set[str] = {skey for _, _, skey in _PRESET_REGISTRY if skey}
+
+# Keys that must NEVER be deleted during a preset load.
+_UI_PRESERVED_KEYS: set[str] = {
+    "top_language_selector", "selected_preset_selector", "ui_language",
+    "video_subject", "video_script", "video_terms", "video_title",
+    "preset_loaded_message", "video_title_enabled",
+}
+
+_BG_VIDEO_OPTIONS = ["none", "random", "source", "custom"]
+
+
+def _collect_preset_data() -> dict:
+    """Collect current GUI state into a flat preset dict.
+
+    Step 1 – sync keyed-widget session_state values into config so the
+              collected data reflects the live GUI, not stale config values.
+    Step 2 – read every registered field from its canonical config store.
+    """
+    for cfg_key, store, skey in _PRESET_REGISTRY:
+        if skey is None or skey not in st.session_state:
+            continue
+        cfg = config.app if store == "app" else config.ui
+        val = st.session_state[skey]
+        if cfg_key == "custom_position":
+            try:
+                val = float(val)
+            except (ValueError, TypeError):
+                continue
+        cfg[cfg_key] = val
+
+    data: dict = {}
+    for cfg_key, store, _ in _PRESET_REGISTRY:
+        cfg = config.app if store == "app" else config.ui
+        if cfg_key in cfg:
+            data[cfg_key] = cfg[cfg_key]
+    return data
+
+
+def _apply_preset_data(raw_data: dict) -> None:
+    """Apply a preset dict to both config stores and session_state.
+
+    Handles both the new flat format and the legacy format that stored UI
+    fields under a nested "ui" key and session fields under "session".
+    """
+    # Flatten legacy format
+    data: dict = {}
+    for k, v in raw_data.items():
+        if k == "ui" and isinstance(v, dict):
+            data.update(v)
+        elif k == "session" and isinstance(v, dict):
+            # Legacy session entries were only use_custom_system_prompt; skip
+            pass
+        else:
+            data[k] = v
+
+    for cfg_key, store, skey in _PRESET_REGISTRY:
+        if cfg_key not in data:
+            continue
+        val = data[cfg_key]
+        cfg = config.app if store == "app" else config.ui
+        cfg[cfg_key] = val
+
+        if skey is None:
+            continue
+        # custom_position: config is float, session_state is string (text_input)
+        if cfg_key == "custom_position":
+            st.session_state[skey] = str(val)
+        else:
+            st.session_state[skey] = val
+
+    # Special: bg_video_type selectbox uses an integer index in session_state
+    if "bg_video_type" in data:
+        val = data["bg_video_type"]
+        st.session_state["bg_video_type_selectbox"] = (
+            _BG_VIDEO_OPTIONS.index(val) if val in _BG_VIDEO_OPTIONS else 0
+        )
 
 
 if "video_subject" not in st.session_state:
@@ -268,30 +447,12 @@ def get_groq_model_ids(api_key: str, base_url: str) -> list[str]:
 
 def on_preset_selected(preset_dict):
     selected = st.session_state.get("selected_preset_selector")
-    if selected and selected in preset_dict:
-        loaded_data = preset_dict[selected]
-        for k, v in loaded_data.items():
-            if k not in ["ui", "session"]:
-                config.app[k] = v
-        if "ui" in loaded_data:
-            for k, v in loaded_data["ui"].items():
-                config.ui[k] = v
-                
-        # Widgetキャッシュのクリア
-        keys_to_keep = {"top_language_selector", "selected_preset_selector", "ui_language"}
-        for key in list(st.session_state.keys()):
-            if key not in keys_to_keep and not key.startswith("_"):
-                st.session_state.pop(key, None)
-                
-        if "session" in loaded_data:
-            for k, v in loaded_data["session"].items():
-                st.session_state[k] = v
-                
-        config.save_config()
-        # コールバック内なので安全に変更可能
-        st.session_state["selected_preset_selector"] = ""
-        st.session_state["subtitle_offset"] = config.app.get("subtitle_offset", 0.0)
-        st.session_state["preset_loaded_message"] = f"{tr('Preset loaded successfully')}: {selected}"
+    if not selected or selected not in preset_dict:
+        return
+    _apply_preset_data(preset_dict[selected])
+    config.save_config()
+    # selected_preset_selector はクリアしない → 読み込んだプリセット名のまま保持
+    st.session_state["preset_loaded_message"] = f"{tr('Preset loaded successfully')}: {selected}"
 
 # プリセット保存/読込機能のUI
 st.write(tr("Preset Settings"))
@@ -325,95 +486,7 @@ with preset_cols[2]:
     # プリセット保存ボタン
     if save_col.button(tr("Save Preset"), use_container_width=True):
         if new_preset_name.strip():
-            # プリセット保存直前にWidgetから最新値を同期
-            if "paragraph_number_input" in st.session_state:
-                config.app["paragraph_number"] = st.session_state["paragraph_number_input"]
-            if "video_script_prompt" in st.session_state:
-                config.app["video_script_prompt"] = st.session_state["video_script_prompt"].strip()
-            if "custom_system_prompt" in st.session_state:
-                config.app["custom_system_prompt"] = st.session_state["custom_system_prompt"].strip()
-            if "use_custom_system_prompt" in st.session_state:
-                config.app["use_custom_system_prompt"] = st.session_state["use_custom_system_prompt"]
-            
-            if "video_concat_mode" in st.session_state:
-                config.app["video_concat_mode"] = st.session_state["video_concat_mode"]
-            if "video_transition_mode" in st.session_state:
-                config.app["video_transition_mode"] = st.session_state["video_transition_mode"]
-            if "video_aspect" in st.session_state:
-                config.app["video_aspect"] = st.session_state["video_aspect"]
-            if "video_clip_duration" in st.session_state:
-                config.app["video_clip_duration"] = st.session_state["video_clip_duration"]
-            if "video_count" in st.session_state:
-                config.app["video_count"] = st.session_state["video_count"]
-            
-            if "voice_volume" in st.session_state:
-                config.app["voice_volume"] = st.session_state["voice_volume"]
-            if "voice_rate" in st.session_state:
-                config.app["voice_rate"] = st.session_state["voice_rate"]
-            if "bgm_type" in st.session_state:
-                config.app["bgm_type"] = st.session_state["bgm_type"]
-            if "bgm_volume" in st.session_state:
-                config.app["bgm_volume"] = st.session_state["bgm_volume"]
-            if "subtitle_enabled" in st.session_state:
-                config.app["subtitle_enabled"] = st.session_state["subtitle_enabled"]
-            if "stroke_color" in st.session_state:
-                config.ui["stroke_color"] = st.session_state["stroke_color"]
-            if "stroke_width" in st.session_state:
-                config.ui["stroke_width"] = st.session_state["stroke_width"]
-
-            preset_data = {}
-            if "subtitle_offset" in st.session_state:
-                config.app["subtitle_offset"] = st.session_state["subtitle_offset"]
-            if "voicevox_base_url_input" in st.session_state:
-                config.app["voicevox_base_url"] = st.session_state["voicevox_base_url_input"].strip()
-            if "aivisspeech_base_url_input" in st.session_state:
-                config.app["aivisspeech_base_url"] = st.session_state["aivisspeech_base_url_input"].strip()
-            if "timezone_input" in st.session_state:
-                config.app["timezone"] = st.session_state["timezone_input"].strip()
-            if "use_title_in_script" in st.session_state:
-                config.app["use_title_in_script"] = st.session_state["use_title_in_script"]
-
-            app_keys = [
-                "llm_provider", "video_source", "video_concat_mode", "video_clip_fit",
-                "video_clip_duration", "match_materials_to_script", "video_count",
-                "voice_name", "voice_volume", "voice_rate", "bgm_type", "bgm_file", "bgm_volume",
-                "subtitle_enabled", "font_name", "text_fore_color", "text_background_color",
-                "rounded_subtitle_background", "font_size", "stroke_color", "stroke_width",
-                "n_threads", "paragraph_number", "video_script_prompt", "custom_system_prompt",
-                "task_folder_template", "video_transition_mode", "video_aspect", "use_custom_system_prompt",
-                "use_title_in_script", "voicevox_base_url", "aivisspeech_base_url", "timezone",
-                "subtitle_offset"
-            ]
-            for provider in ["openai", "aihubmix", "aimlapi", "moonshot", "azure", "qwen", "deepseek", "modelscope", "gemini", "grok", "groq", "ollama", "llmcpp", "g4f", "oneapi", "cloudflare", "ernie", "minimax", "mimo", "pollinations", "litellm"]:
-                app_keys.append(f"{provider}_model_name")
-                app_keys.append(f"{provider}_api_key")
-                app_keys.append(f"{provider}_base_url")
-                if provider == "ernie":
-                    app_keys.append(f"{provider}_secret_key")
-                if provider == "cloudflare":
-                    app_keys.append(f"{provider}_account_id")
-            
-            for k in app_keys:
-                if k in config.app:
-                    preset_data[k] = config.app[k]
-                    
-            ui_keys = [
-                "subtitle_position", "custom_position", "video_margin_ratio",
-                "bg_video_type", "bg_video_file", "text_margin_x", "text_margin_y",
-                "text_color_highlight_enabled", "color1_fore", "color1_stroke",
-                "color1_stroke_width", "color2_fore", "color2_stroke",
-                "color2_stroke_width", "color3_fore", "color3_stroke",
-                "color3_stroke_width", "tts_server", "subtitle_background_enabled"
-            ]
-            preset_data["ui"] = {}
-            for k in ui_keys:
-                if k in config.ui:
-                    preset_data["ui"][k] = config.ui[k]
-                    
-            preset_data["session"] = {
-                "use_custom_system_prompt": st.session_state.get("use_custom_system_prompt", False),
-            }
-            
+            preset_data = _collect_preset_data()
             if presets.save_preset(new_preset_name.strip(), preset_data):
                 st.success(tr("Preset saved successfully"))
                 st.rerun()
@@ -463,6 +536,26 @@ if not config.app.get("hide_config", False):
                 help=tr("Template variables: {{task_id}}, {{datetime}}, {{date}}, {{time}}, {{model_name}}, {{video_subject}}")
             )
             config.app["task_folder_template"] = task_folder_template
+
+            # タイムゾーン設定
+            saved_timezone = config.app.get("timezone", "Asia/Tokyo")
+            timezone_input = st.text_input(
+                tr("Timezone"),
+                value=saved_timezone,
+                key="timezone_input",
+                help=tr("Timezone for task folder name (e.g. Asia/Tokyo, UTC)")
+            )
+            config.app["timezone"] = timezone_input.strip()
+
+            # GPU設定
+            saved_cuda_device = config.app.get("cuda_device", "")
+            cuda_device_input = st.text_input(
+                tr("GPU Device (CUDA_VISIBLE_DEVICES)"),
+                value=saved_cuda_device,
+                key="cuda_device_input",
+                help=tr("GPU Device Help")
+            )
+            config.app["cuda_device"] = cuda_device_input.strip()
 
 
         # 中间面板 - LLM 设置
@@ -1245,6 +1338,7 @@ with middle_panel:
             bg_video_options = [
                 (tr("None"), "none"),
                 (tr("Random Background Video"), "random"),
+                (tr("Source Background Video"), "source"),
                 (tr("Custom Background Video File"), "custom"),
             ]
             saved_bg_video_type = config.ui.get("bg_video_type", "none")
@@ -1258,19 +1352,39 @@ with middle_panel:
                 tr("Background Video Type"),
                 options=range(len(bg_video_options)),
                 index=saved_bg_index,
+                key="bg_video_type_selectbox",
                 format_func=lambda x: bg_video_options[x][0],
             )
             params.bg_video_type = bg_video_options[selected_bg_index][1]
             config.ui["bg_video_type"] = params.bg_video_type
             
             if params.bg_video_type == "custom":
-                saved_bg_video_file = config.ui.get("bg_video_file", "")
-                params.bg_video_file = st.text_input(
-                    tr("Custom Background Video File Path"),
-                    value=saved_bg_video_file,
-                    key="custom_bg_video_file_input",
-                )
-                config.ui["bg_video_file"] = params.bg_video_file
+                bg_dir = utils.resource_dir("bg_videos")
+                if not os.path.exists(bg_dir):
+                    os.makedirs(bg_dir, exist_ok=True)
+                bg_files = []
+                for ext in ["*.mp4", "*.mkv", "*.mov", "*.avi"]:
+                    bg_files.extend(glob.glob(os.path.join(bg_dir, ext)))
+                bg_filenames = sorted([os.path.basename(f) for f in bg_files])
+                
+                if not bg_filenames:
+                    st.warning(tr("No background videos found in resource/bg_videos"))
+                    params.bg_video_file = ""
+                else:
+                    saved_bg_video_file = config.ui.get("bg_video_file", "")
+                    try:
+                        saved_bg_file_index = bg_filenames.index(saved_bg_video_file)
+                    except ValueError:
+                        saved_bg_file_index = 0
+                        
+                    selected_bg_file = st.selectbox(
+                        tr("Custom Background Video File"),
+                        options=bg_filenames,
+                        index=saved_bg_file_index,
+                        key="custom_bg_video_file_selectbox"
+                    )
+                    params.bg_video_file = selected_bg_file
+                    config.ui["bg_video_file"] = params.bg_video_file
     with st.container(border=True):
         st.write(tr("Audio Settings"))
 

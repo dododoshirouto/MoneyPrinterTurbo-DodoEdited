@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//home/dodobuntu/MoneyPrinterTurbo/app/services/**)",
+      "Read(///wsl.localhost/Ubuntu/home/dodobuntu/MoneyPrinterTurbo/app/services/**)",
+      "PowerShell(wsl python3 -c \"import ast; ast.parse\\(open\\('/home/dodobuntu/MoneyPrinterTurbo/app/services/video.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "PowerShell(wsl cat /home/dodobuntu/MoneyPrinterTurbo/docker-compose.yml)",
+      "PowerShell(wsl grep -n \"ffmpeg\\\\|cuda\\\\|nvidia\\\\|gpu\" /home/dodobuntu/MoneyPrinterTurbo/Dockerfile -i)",
+      "PowerShell(wsl grep -n \"ffmpeg\" /home/dodobuntu/MoneyPrinterTurbo/Dockerfile)",
+      "Read(//home/dodobuntu/MoneyPrinterTurbo/**)",
+      "Read(///wsl.localhost/Ubuntu/home/dodobuntu/MoneyPrinterTurbo/**)"
+    ],
+    "additionalDirectories": [
+      "\\home\\dodobuntu\\MoneyPrinterTurbo\\app\\services",
+      "\\\\wsl.localhost\\Ubuntu\\home\\dodobuntu\\MoneyPrinterTurbo\\app\\services",
+      "\\dev"
+    ]
+  }
+}

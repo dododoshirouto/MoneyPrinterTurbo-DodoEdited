@@ -247,30 +247,33 @@ def generate_final_videos(
         if bg_video_type == "source":
             bg_dir = path.join(utils.task_dir(task_id), f"bg-{index}")
             os.makedirs(bg_dir, exist_ok=True)
-            logger.info(f"downloading background video to {bg_dir}")
-            
-            video_terms = params.video_terms
-            if isinstance(video_terms, str):
-                video_terms_list = [term.strip() for term in re.split(r"[,，]", video_terms)]
-            elif isinstance(video_terms, list):
-                video_terms_list = [term.strip() for term in video_terms]
-            else:
-                video_terms_list = [params.video_subject]
-            
-            # 1本だけダウンロードすればよいので、要求時間を1クリップの最大時間に設定する
+            logger.info(f"downloading background video (source mode) to {bg_dir}")
+
+            # 背景動画は内容に無関係な抽象的映像を1本ループで使う。
+            # メイン動画のキーワードとは別に、汎用的な抽象キーワードで検索する。
+            bg_search_terms = [
+                "abstract background",
+                "nature scenery",
+                "bokeh blur light",
+                "particle motion",
+                "soft gradient",
+            ]
+
+            # 1本あれば十分なので duration を短めに設定してすぐ終了させる
             bg_downloaded = material.download_videos(
-                task_id=f"{task_id}-bg",
-                search_terms=video_terms_list,
+                task_id=f"{task_id}-bg-{index}",
+                search_terms=bg_search_terms,
                 source=params.video_source,
                 video_aspect=params.video_aspect,
                 video_concat_mode=VideoConcatMode.random,
-                audio_duration=params.video_clip_duration,
-                max_clip_duration=params.video_clip_duration,
+                audio_duration=30,
+                max_clip_duration=60,
                 material_directory=bg_dir,
             )
             if bg_downloaded:
-                # 最初の1本をそのまま背景動画として使用する
                 bg_video_file_to_use = bg_downloaded[0]
+            else:
+                logger.warning("background video download failed; proceeding without background")
         elif bg_video_type == "custom":
             custom_bg_name = getattr(params, "bg_video_file", "")
             if custom_bg_name:
@@ -295,6 +298,7 @@ def generate_final_videos(
             threads=params.n_threads,
             video_clip_fit=getattr(params, "video_clip_fit", "contain"),
             video_margin_ratio=getattr(params, "video_margin_ratio", 0.0),
+            bg_video_file=bg_video_file_to_use,
         )
 
         _progress += 50 / params.video_count / 2
@@ -303,9 +307,11 @@ def generate_final_videos(
         final_video_path = path.join(utils.task_dir(task_id), f"final-{index}.mp4")
 
         logger.info(f"\n\n## generating video: {index} => {final_video_path}")
-        
+
+        # bg合成はcombine_videos内で完了済みなのでgenerate_videoには渡さない
         params_copy = params.model_copy()
-        params_copy.bg_video_file = bg_video_file_to_use
+        params_copy.bg_video_file = ""
+        params_copy.bg_video_type = "none"
         
         video.generate_video(
             video_path=combined_video_path,

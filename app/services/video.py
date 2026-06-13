@@ -510,6 +510,7 @@ def combine_videos(
     threads: int = 2,
     video_clip_fit: str = "contain",
     video_margin_ratio: float = 0.0,
+    bg_video_file: str = "",
 ) -> str:
     audio_clip = AudioFileClip(audio_file)
     try:
@@ -527,6 +528,31 @@ def combine_videos(
 
     aspect = VideoAspect(video_aspect)
     video_width, video_height = aspect.to_resolution()
+
+    # 背景動画の事前ロード（containモード時に黒帯の代わりに使う）
+    bg_clip_for_combine = None
+    if bg_video_file and os.path.exists(bg_video_file):
+        try:
+            _bg = _open_video_clip_quietly(bg_video_file)
+            _bg = _bg.with_effects([vfx.Loop(duration=audio_duration + 10)])
+            _bg_w, _bg_h = _bg.size
+            _bg_ratio = _bg_w / _bg_h
+            _canvas_ratio = video_width / video_height
+            if _bg_ratio > _canvas_ratio:
+                _bg_scale = video_height / _bg_h
+            else:
+                _bg_scale = video_width / _bg_w
+            _bg_nw = int(_bg_w * _bg_scale)
+            _bg_nh = int(_bg_h * _bg_scale)
+            _bg = _bg.resized(new_size=(_bg_nw, _bg_nh))
+            bg_clip_for_combine = _bg.cropped(
+                width=video_width, height=video_height,
+                x_center=_bg_nw / 2, y_center=_bg_nh / 2,
+            )
+            logger.info(f"background video loaded for combine_videos: {bg_video_file}")
+        except Exception as e:
+            logger.warning(f"failed to load bg_video_file for combine: {e}")
+            bg_clip_for_combine = None
 
     processed_clips = []
     subclipped_items = []
@@ -606,16 +632,16 @@ def combine_videos(
                             scale_factor = target_h / clip_h
                         else:
                             scale_factor = target_w / clip_w
-                        
+
                         new_width = int(clip_w * scale_factor)
                         new_height = int(clip_h * scale_factor)
                         clip_resized = clip.resized(new_size=(new_width, new_height))
-                        
+
                         # crop the center region
                         x_center = new_width / 2
                         y_center = new_height / 2
                         clip_cropped = clip_resized.cropped(width=target_w, height=target_h, x_center=x_center, y_center=y_center)
-                        
+
                         background = ColorClip(size=(video_width, video_height), color=(0, 0, 0)).with_duration(clip_duration)
                         clip = CompositeVideoClip([background, clip_cropped.with_position("center")])
                     else:  # contain
@@ -627,7 +653,13 @@ def combine_videos(
                         new_width = int(clip_w * scale_factor)
                         new_height = int(clip_h * scale_factor)
 
-                        background = ColorClip(size=(video_width, video_height), color=(0, 0, 0)).with_duration(clip_duration)
+                        if bg_clip_for_combine is not None:
+                            # bgクリップの該当タイムスライスをバックグラウンドとして使う
+                            background = bg_clip_for_combine.subclipped(
+                                video_duration, video_duration + clip_duration
+                            ).with_duration(clip_duration)
+                        else:
+                            background = ColorClip(size=(video_width, video_height), color=(0, 0, 0)).with_duration(clip_duration)
                         clip_resized = clip.resized(new_size=(new_width, new_height)).with_position("center")
                         clip = CompositeVideoClip([background, clip_resized])
                     
@@ -856,7 +888,7 @@ def generate_video(
         return params.text_background_color
 
     def parse_markup(text):
-        pattern = re.compile(r'<(color[1-3])>(.*?)</\1>')
+        pattern = re.compile(r'<(color[1-3])>(.*?)</\1>', re.DOTALL)
         segments = []
         last_idx = 0
         for match in pattern.finditer(text):

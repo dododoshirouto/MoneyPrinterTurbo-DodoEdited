@@ -1,0 +1,924 @@
+﻿diff --git a/webui/Main.py b/webui/Main.py
+index 30382c8..fd275d1 100644
+--- a/webui/Main.py
++++ b/webui/Main.py
+@@ -1,6 +1,7 @@
+ import os
+ import sys
+ import webbrowser
++import glob
+ from uuid import UUID, uuid4
+ 
+ import requests
+@@ -16,6 +17,11 @@ if root_dir not in sys.path:
+     print("")
+ 
+ from app.config import config
++# Apply GPU settings as early as possible before loading other packages like torch/whisper
++cuda_device = config.app.get("cuda_device", "")
++if cuda_device:
++    os.environ["CUDA_VISIBLE_DEVICES"] = str(cuda_device).strip()
++
+ from app.models.schema import (
+     MaterialInfo,
+     VideoAspect,
+@@ -266,31 +272,131 @@ def get_groq_model_ids(api_key: str, base_url: str) -> list[str]:
+         logger.warning(f"failed to fetch groq models: {e}")
+         return []
+ 
++# GUI繧ｭ繝ｼ縺ｨconfig縺ｮ繧ｭ繝ｼ縺ｮ繝槭ャ繝斐Φ繧ｰ・医そ繝・す繝ｧ繝ｳ螟画焚縺ｨconfig蛟､繧定・蜍輔〒荳諡ｬ蜷梧悄縺吶ｋ縺溘ａ縺ｮ螳夂ｾｩ・・+CONFIG_KEYS = {
++    # session_key: (config_section, config_key)
++    "video_subject": ("app", "video_subject"),
++    "video_language": ("app", "video_language"),
++    "paragraph_number": ("app", "paragraph_number"),
++    "video_script_prompt": ("app", "video_script_prompt"),
++    "use_custom_system_prompt": ("app", "use_custom_system_prompt"),
++    "custom_system_prompt": ("app", "custom_system_prompt"),
++    "video_concat_mode": ("app", "video_concat_mode"),
++    "video_transition_mode": ("app", "video_transition_mode"),
++    "video_aspect": ("app", "video_aspect"),
++    "video_clip_fit": ("app", "video_clip_fit"),
++    "video_clip_duration": ("app", "video_clip_duration"),
++    "video_count": ("app", "video_count"),
++    "match_materials_to_script": ("app", "match_materials_to_script"),
++    "video_source": ("app", "video_source"),
++    "video_codec": ("app", "video_codec"),
++    "video_margin_ratio": ("ui", "video_margin_ratio"),
++    "bg_video_type": ("ui", "bg_video_type"),
++    "bg_video_file": ("ui", "bg_video_file"),
++    "tts_server": ("ui", "tts_server"),
++    "voice_name": ("ui", "voice_name"),
++    "voice_volume": ("app", "voice_volume"),
++    "voice_rate": ("app", "voice_rate"),
++    "bgm_type": ("app", "bgm_type"),
++    "bgm_volume": ("app", "bgm_volume"),
++    "subtitle_enabled": ("app", "subtitle_enabled"),
++    "subtitle_offset": ("app", "subtitle_offset"),
++    "timezone": ("app", "timezone"),
++    "cuda_device": ("app", "cuda_device"),
++    "use_title_in_script": ("app", "use_title_in_script"),
++    "llm_provider": ("app", "llm_provider"),
++    "enable_web_search": ("app", "enable_web_search"),
++    "web_search_max_steps": ("app", "web_search_max_steps"),
++    
++    # UI
++    "font_name": ("ui", "font_name"),
++    "subtitle_position": ("ui", "subtitle_position"),
++    "custom_position": ("ui", "custom_position"),
++    "text_fore_color": ("ui", "text_fore_color"),
++    "font_size": ("ui", "font_size"),
++    "stroke_color": ("ui", "stroke_color"),
++    "stroke_width": ("ui", "stroke_width"),
++    "subtitle_background_enabled": ("ui", "subtitle_background_enabled"),
++    "subtitle_background_color": ("ui", "subtitle_background_color"),
++    "rounded_subtitle_background": ("ui", "rounded_subtitle_background"),
++    "text_margin_x": ("ui", "text_margin_x"),
++    "text_margin_y": ("ui", "text_margin_y"),
++    
++    # 蠑ｷ隱ｿ濶ｲ
++    "text_color_highlight_enabled": ("ui", "text_color_highlight_enabled"),
++    "color1_fore": ("ui", "color1_fore"),
++    "color1_stroke": ("ui", "color1_stroke"),
++    "color1_stroke_width": ("ui", "color1_stroke_width"),
++    "color2_fore": ("ui", "color2_fore"),
++    "color2_stroke": ("ui", "color2_stroke"),
++    "color2_stroke_width": ("ui", "color2_stroke_width"),
++    "color3_fore": ("ui", "color3_fore"),
++    "color3_stroke": ("ui", "color3_stroke"),
++    "color3_stroke_width": ("ui", "color3_stroke_width"),
++}
++
++def sync_gui_to_config_and_params(params=None):
++    """
++    GUI縺ｮst.session_state縺ｮ險ｭ螳壼､繧・config 縺ｨ params 繧ｪ繝悶ず繧ｧ繧ｯ繝医↓蠑ｷ蛻ｶ蜷梧悄縺吶ｋ縲・+    """
++    for key, (section, cfg_key) in CONFIG_KEYS.items():
++        if key in st.session_state:
++            val = st.session_state[key]
++            
++            # config 縺ｸ縺ｮ菫晏ｭ・+            if section == "app":
++                config.app[cfg_key] = val
++            elif section == "ui":
++                config.ui[cfg_key] = val
++                
++            # params 縺ｸ縺ｮ菫晏ｭ・(螻樊ｧ縺後≠繧後・)
++            if params and hasattr(params, cfg_key):
++                setattr(params, cfg_key, val)
++
++    # LLM繝励Ο繝舌う繝蝗ｺ譛峨・蜈･蜉帛､縺ｮ蜷梧悄
++    provider = config.app.get("llm_provider", "openai")
++    for key in list(st.session_state.keys()):
++        if key.startswith(f"{provider}_"):
++            cfg_field = key[len(f"{provider}_"):]
++            if cfg_field.endswith("_input"):
++                cfg_field_clean = cfg_field[:-len("_input")]
++                config.app[f"{provider}_{cfg_field_clean}"] = st.session_state[key]
++            elif cfg_field.endswith("_select"):
++                cfg_field_clean = cfg_field[:-len("_select")]
++                config.app[f"{provider}_{cfg_field_clean}"] = st.session_state[key]
++                
++    config.save_config()
++
+ def on_preset_selected(preset_dict):
+     selected = st.session_state.get("selected_preset_selector")
+     if selected and selected in preset_dict:
+         loaded_data = preset_dict[selected]
+-        for k, v in loaded_data.items():
+-            if k not in ["ui", "session"]:
++        
++        # 1. config 縺ｸ縺ｮ蠕ｩ蜈・ｼ亥ｼｷ蛻ｶ蜿肴丐・・+        if "app" in loaded_data:
++            for k, v in loaded_data["app"].items():
+                 config.app[k] = v
+         if "ui" in loaded_data:
+             for k, v in loaded_data["ui"].items():
+                 config.ui[k] = v
+                 
+-        # Widget繧ｭ繝｣繝・す繝･縺ｮ繧ｯ繝ｪ繧｢
+-        keys_to_keep = {"top_language_selector", "selected_preset_selector", "ui_language"}
++        # 2. 逕ｻ髱｢Widget縺ｮ繧ｻ繝・す繝ｧ繝ｳ迥ｶ諷九ｒ pop 縺励※縲仝idget謠冗判譎ゅ↓ config 縺ｮ譛譁ｰ蛟､縺九ｉ蜀榊・譛溷喧縺輔○繧・+        for key in CONFIG_KEYS.keys():
++            st.session_state.pop(key, None)
++            
++        # LLM繝励Ο繝舌う繝蝗ｺ譛峨・繧ｻ繝・す繝ｧ繝ｳ繧ｭ繝ｼ繧・pop 縺吶ｋ
+         for key in list(st.session_state.keys()):
+-            if key not in keys_to_keep and not key.startswith("_"):
++            if any(key.startswith(f"{p}_") for p in ["openai", "aihubmix", "aimlapi", "moonshot", "azure", "qwen", "deepseek", "modelscope", "gemini", "grok", "groq", "ollama", "llmcpp", "g4f", "oneapi", "cloudflare", "ernie", "minimax", "mimo", "pollinations", "litellm"]):
+                 st.session_state.pop(key, None)
+-                
++
++        # 繧ｻ繝・す繝ｧ繝ｳ蟆ら畑繝・・繧ｿ (video_subject, script縺ｪ縺ｩ) 縺ｮ蠕ｩ蜈・         if "session" in loaded_data:
+             for k, v in loaded_data["session"].items():
+                 st.session_state[k] = v
+-                
++
+         config.save_config()
+-        # 繧ｳ繝ｼ繝ｫ繝舌ャ繧ｯ蜀・↑縺ｮ縺ｧ螳牙・縺ｫ螟画峩蜿ｯ閭ｽ
+-        st.session_state["selected_preset_selector"] = ""
+-        st.session_state["subtitle_offset"] = config.app.get("subtitle_offset", 0.0)
++        # 驕ｸ謚槭＆繧後◆繝励Μ繧ｻ繝・ヨ蜷阪ｒ邯ｭ謖√☆繧・+        st.session_state["selected_preset_selector"] = selected
+         st.session_state["preset_loaded_message"] = f"{tr('Preset loaded successfully')}: {selected}"
+ 
+ # 繝励Μ繧ｻ繝・ヨ菫晏ｭ・隱ｭ霎ｼ讖溯・縺ｮUI
+@@ -305,9 +411,16 @@ with preset_cols[0]:
+     preset_dict = presets.load_presets()
+     preset_names = list(preset_dict.keys())
+     
++    preset_options = [""] + preset_names
++    selected_val = st.session_state.get("selected_preset_selector", "")
++    default_idx = 0
++    if selected_val in preset_options:
++        default_idx = preset_options.index(selected_val)
++        
+     selected_preset = st.selectbox(
+         tr("Select Preset"),
+-        options=[""] + preset_names,
++        options=preset_options,
++        index=default_idx,
+         key="selected_preset_selector",
+         label_visibility="collapsed",
+         on_change=on_preset_selected,
+@@ -325,96 +438,23 @@ with preset_cols[2]:
+     # 繝励Μ繧ｻ繝・ヨ菫晏ｭ倥・繧ｿ繝ｳ
+     if save_col.button(tr("Save Preset"), use_container_width=True):
+         if new_preset_name.strip():
+-            # 繝励Μ繧ｻ繝・ヨ菫晏ｭ倡峩蜑阪↓Widget縺九ｉ譛譁ｰ蛟､繧貞酔譛・-            if "paragraph_number_input" in st.session_state:
+-                config.app["paragraph_number"] = st.session_state["paragraph_number_input"]
+-            if "video_script_prompt" in st.session_state:
+-                config.app["video_script_prompt"] = st.session_state["video_script_prompt"].strip()
+-            if "custom_system_prompt" in st.session_state:
+-                config.app["custom_system_prompt"] = st.session_state["custom_system_prompt"].strip()
+-            if "use_custom_system_prompt" in st.session_state:
+-                config.app["use_custom_system_prompt"] = st.session_state["use_custom_system_prompt"]
+-            
+-            if "video_concat_mode" in st.session_state:
+-                config.app["video_concat_mode"] = st.session_state["video_concat_mode"]
+-            if "video_transition_mode" in st.session_state:
+-                config.app["video_transition_mode"] = st.session_state["video_transition_mode"]
+-            if "video_aspect" in st.session_state:
+-                config.app["video_aspect"] = st.session_state["video_aspect"]
+-            if "video_clip_duration" in st.session_state:
+-                config.app["video_clip_duration"] = st.session_state["video_clip_duration"]
+-            if "video_count" in st.session_state:
+-                config.app["video_count"] = st.session_state["video_count"]
+-            
+-            if "voice_volume" in st.session_state:
+-                config.app["voice_volume"] = st.session_state["voice_volume"]
+-            if "voice_rate" in st.session_state:
+-                config.app["voice_rate"] = st.session_state["voice_rate"]
+-            if "bgm_type" in st.session_state:
+-                config.app["bgm_type"] = st.session_state["bgm_type"]
+-            if "bgm_volume" in st.session_state:
+-                config.app["bgm_volume"] = st.session_state["bgm_volume"]
+-            if "subtitle_enabled" in st.session_state:
+-                config.app["subtitle_enabled"] = st.session_state["subtitle_enabled"]
+-            if "stroke_color" in st.session_state:
+-                config.ui["stroke_color"] = st.session_state["stroke_color"]
+-            if "stroke_width" in st.session_state:
+-                config.ui["stroke_width"] = st.session_state["stroke_width"]
+-
+-            preset_data = {}
+-            if "subtitle_offset" in st.session_state:
+-                config.app["subtitle_offset"] = st.session_state["subtitle_offset"]
+-            if "voicevox_base_url_input" in st.session_state:
+-                config.app["voicevox_base_url"] = st.session_state["voicevox_base_url_input"].strip()
+-            if "aivisspeech_base_url_input" in st.session_state:
+-                config.app["aivisspeech_base_url"] = st.session_state["aivisspeech_base_url_input"].strip()
+-            if "timezone_input" in st.session_state:
+-                config.app["timezone"] = st.session_state["timezone_input"].strip()
+-            if "use_title_in_script" in st.session_state:
+-                config.app["use_title_in_script"] = st.session_state["use_title_in_script"]
+-
+-            app_keys = [
+-                "llm_provider", "video_source", "video_concat_mode", "video_clip_fit",
+-                "video_clip_duration", "match_materials_to_script", "video_count",
+-                "voice_name", "voice_volume", "voice_rate", "bgm_type", "bgm_file", "bgm_volume",
+-                "subtitle_enabled", "font_name", "text_fore_color", "text_background_color",
+-                "rounded_subtitle_background", "font_size", "stroke_color", "stroke_width",
+-                "n_threads", "paragraph_number", "video_script_prompt", "custom_system_prompt",
+-                "task_folder_template", "video_transition_mode", "video_aspect", "use_custom_system_prompt",
+-                "use_title_in_script", "voicevox_base_url", "aivisspeech_base_url", "timezone",
+-                "subtitle_offset"
+-            ]
+-            for provider in ["openai", "aihubmix", "aimlapi", "moonshot", "azure", "qwen", "deepseek", "modelscope", "gemini", "grok", "groq", "ollama", "llmcpp", "g4f", "oneapi", "cloudflare", "ernie", "minimax", "mimo", "pollinations", "litellm"]:
+-                app_keys.append(f"{provider}_model_name")
+-                app_keys.append(f"{provider}_api_key")
+-                app_keys.append(f"{provider}_base_url")
+-                if provider == "ernie":
+-                    app_keys.append(f"{provider}_secret_key")
+-                if provider == "cloudflare":
+-                    app_keys.append(f"{provider}_account_id")
+-            
+-            for k in app_keys:
+-                if k in config.app:
+-                    preset_data[k] = config.app[k]
+-                    
+-            ui_keys = [
+-                "subtitle_position", "custom_position", "video_margin_ratio",
+-                "bg_video_type", "bg_video_file", "text_margin_x", "text_margin_y",
+-                "text_color_highlight_enabled", "color1_fore", "color1_stroke",
+-                "color1_stroke_width", "color2_fore", "color2_stroke",
+-                "color2_stroke_width", "color3_fore", "color3_stroke",
+-                "color3_stroke_width", "tts_server", "subtitle_background_enabled"
+-            ]
+-            preset_data["ui"] = {}
+-            for k in ui_keys:
+-                if k in config.ui:
+-                    preset_data["ui"][k] = config.ui[k]
+-                    
+-            preset_data["session"] = {
+-                "use_custom_system_prompt": st.session_state.get("use_custom_system_prompt", False),
++            # 1. 逕ｻ髱｢縺ｮ蜈ｨWidget縺ｮ蛟､繧・config 縺ｫ蜷梧悄
++            sync_gui_to_config_and_params()
++
++            # 2. 繝励Μ繧ｻ繝・ヨ繝・・繧ｿ繧剃ｽ懈・・医☆縺ｹ縺ｦ縺ｮ險ｭ螳壹ｒ荳ｸ縺斐→菫晏ｭ假ｼ・+            preset_data = {
++                "app": dict(config.app),
++                "ui": dict(config.ui),
++                "session": {
++                    "video_subject": st.session_state.get("video_subject", ""),
++                    "video_script": st.session_state.get("video_script", ""),
++                    "video_terms": st.session_state.get("video_terms", ""),
++                    "video_title": st.session_state.get("video_title", ""),
++                }
+             }
+             
+             if presets.save_preset(new_preset_name.strip(), preset_data):
++                st.session_state["selected_preset_selector"] = new_preset_name.strip()
+                 st.success(tr("Preset saved successfully"))
+                 st.rerun()
+         else:
+@@ -425,6 +465,7 @@ with preset_cols[2]:
+         if selected_preset:
+             if presets.delete_preset(selected_preset):
+                 st.success(f"Preset deleted: {selected_preset}")
++                st.session_state["selected_preset_selector"] = ""
+                 st.rerun()
+         else:
+             st.error("Please select a preset to delete")
+@@ -464,6 +505,24 @@ if not config.app.get("hide_config", False):
+             )
+             config.app["task_folder_template"] = task_folder_template
+ 
++            # 繧ｿ繧､繝繧ｾ繝ｼ繝ｳ險ｭ螳・+            saved_timezone = config.app.get("timezone", "Asia/Tokyo")
++            st.text_input(
++                tr("Timezone"),
++                value=saved_timezone,
++                key="timezone",
++                help=tr("Timezone for task folder name (e.g. Asia/Tokyo, UTC)")
++            )
++
++            # GPU險ｭ螳・+            saved_cuda_device = config.app.get("cuda_device", "")
++            st.text_input(
++                tr("GPU Device (CUDA_VISIBLE_DEVICES)"),
++                value=saved_cuda_device,
++                key="cuda_device",
++                help=tr("GPU Device Help")
++            )
++
+ 
+         # 荳ｭ髣ｴ髱｢譚ｿ - LLM 隶ｾ鄂ｮ
+ 
+@@ -499,24 +558,20 @@ if not config.app.get("hide_config", False):
+                 ("Pollinations", "pollinations"),
+                 ("LiteLLM", "litellm"),
+             ]
+-            llm_provider_labels = [label for label, _ in llm_provider_options]
+-            llm_provider_values = {
+-                label: provider_id for label, provider_id in llm_provider_options
+-            }
++            provider_ids = [item[1] for item in llm_provider_options]
+             saved_llm_provider = config.app.get("llm_provider", "openai").lower()
+-            saved_llm_provider_index = 0
+-            for i, (_, provider_id) in enumerate(llm_provider_options):
+-                if provider_id == saved_llm_provider:
+-                    saved_llm_provider_index = i
+-                    break
++            if saved_llm_provider not in provider_ids:
++                saved_llm_provider = "openai"
++            saved_llm_provider_index = provider_ids.index(saved_llm_provider)
+ 
+-            llm_provider_label = st.selectbox(
++            llm_provider = st.selectbox(
+                 tr("LLM Provider"),
+-                options=llm_provider_labels,
++                options=provider_ids,
++                format_func=lambda x: dict((item[1], item[0]) for item in llm_provider_options)[x],
+                 index=saved_llm_provider_index,
++                key="llm_provider",
+             )
+             llm_helper = st.container()
+-            llm_provider = llm_provider_values[llm_provider_label]
+             config.app["llm_provider"] = llm_provider
+ 
+             llm_api_key = config.app.get(f"{llm_provider}_api_key", "")
+@@ -781,9 +836,17 @@ if not config.app.get("hide_config", False):
+                 st.info(tips)
+ 
+             st_llm_api_key = st.text_input(
+-                tr("API Key"), value=llm_api_key, type="password"
++                tr("API Key"),
++                value=llm_api_key,
++                type="password",
++                key=f"{llm_provider}_api_key_input",
++            )
++            st_llm_base_url = st.text_input(
++                tr("Base Url"),
++                value=llm_base_url,
++                key=f"{llm_provider}_base_url_input",
+             )
+-            st_llm_base_url = st.text_input(tr("Base Url"), value=llm_base_url)
++            
+             st_llm_model_name = ""
+             if llm_provider != "ernie":
+                 if llm_provider == "groq":
+@@ -819,35 +882,63 @@ if not config.app.get("hide_config", False):
+                             st.caption(
+                                 "Add a Groq API key to load available models automatically."
+                             )
++                elif llm_provider == "llmcpp":
++                    # llmcpp 縺ｮ螻･豁ｴ驕ｸ謚朸I
++                    history = config.app.get("llmcpp_model_history", ["local-model"])
++                    if not isinstance(history, list):
++                        history = [history] if history else ["local-model"]
++                    if "local-model" not in history:
++                        history = ["local-model"] + history
++                    
++                    options = history + [tr("Enter New Model...")]
++                    
++                    selected_model = llm_model_name
++                    default_idx = 0
++                    if selected_model in history:
++                        default_idx = history.index(selected_model)
++                    else:
++                        default_idx = len(options) - 1
++                        
++                    selected_opt = st.selectbox(
++                        tr("Model Name (History)"),
++                        options=options,
++                        index=default_idx,
++                        key="llmcpp_model_name_select",
++                    )
++                    
++                    if selected_opt == tr("Enter New Model..."):
++                        st_llm_model_name = st.text_input(
++                            tr("New Model Name"),
++                            value=llm_model_name if llm_model_name not in history else "",
++                            key="llmcpp_model_name_input",
++                        )
++                    else:
++                        st_llm_model_name = selected_opt
++                        # selectbox 縺ｮ蛟､繧ょ酔譛溘〒縺阪ｋ繧医≧縺ｫ st.session_state 縺ｫ險ｭ螳壹＠縺ｦ縺翫￥
++                        st.session_state["llmcpp_model_name_input"] = selected_opt
+                 else:
+                     st_llm_model_name = st.text_input(
+                         tr("Model Name"),
+                         value=llm_model_name,
+                         key=f"{llm_provider}_model_name_input",
+                     )
+-                if st_llm_model_name:
+-                    config.app[f"{llm_provider}_model_name"] = st_llm_model_name
+             else:
+                 st_llm_model_name = None
+ 
+-            if st_llm_api_key:
+-                config.app[f"{llm_provider}_api_key"] = st_llm_api_key
+-            if st_llm_base_url:
+-                config.app[f"{llm_provider}_base_url"] = st_llm_base_url
+-            if st_llm_model_name:
+-                config.app[f"{llm_provider}_model_name"] = st_llm_model_name
+             if llm_provider == "ernie":
+-                st_llm_secret_key = st.text_input(
+-                    tr("Secret Key"), value=llm_secret_key, type="password"
++                st.text_input(
++                    tr("Secret Key"),
++                    value=llm_secret_key,
++                    type="password",
++                    key=f"{llm_provider}_secret_key_input",
+                 )
+-                config.app[f"{llm_provider}_secret_key"] = st_llm_secret_key
+ 
+             if llm_provider == "cloudflare":
+-                st_llm_account_id = st.text_input(
+-                    tr("Account ID"), value=llm_account_id
++                st.text_input(
++                    tr("Account ID"),
++                    value=llm_account_id,
++                    key=f"{llm_provider}_account_id_input",
+                 )
+-                if st_llm_account_id:
+-                    config.app[f"{llm_provider}_account_id"] = st_llm_account_id
+ 
+         # 蜿ｳ萓ｧ髱｢譚ｿ - API 蟇・徴隶ｾ鄂ｮ
+         with right_config_panel:
+@@ -911,17 +1002,20 @@ with left_panel:
+         for code in support_locales:
+             video_languages.append((code, code))
+ 
+-        selected_index = st.selectbox(
++        saved_video_language = config.app.get("video_language", "")
++        lang_values = [lang[1] for lang in video_languages]
++        if saved_video_language not in lang_values:
++            saved_video_language = ""
++        saved_lang_index = lang_values.index(saved_video_language)
++
++        selected_lang = st.selectbox(
+             tr("Script Language"),
+-            index=0,
+-            options=range(
+-                len(video_languages)
+-            ),  # Use the index as the internal option value
+-            format_func=lambda x: video_languages[x][
+-                0
+-            ],  # The label is displayed to the user
++            options=lang_values,
++            index=saved_lang_index,
++            format_func=lambda x: dict((lang[1], lang[0]) for lang in video_languages)[x],
++            key="video_language",
+         )
+-        params.video_language = video_languages[selected_index][1]
++        params.video_language = selected_lang
+ 
+         with st.expander(tr("Advanced Script Settings"), expanded=False):
+             params.paragraph_number = st.slider(
+@@ -929,7 +1023,7 @@ with left_panel:
+                 min_value=llm.MIN_SCRIPT_PARAGRAPH_NUMBER,
+                 max_value=llm.MAX_SCRIPT_PARAGRAPH_NUMBER,
+                 value=config.app.get("paragraph_number", 1),
+-                key="paragraph_number_input",
++                key="paragraph_number",
+             )
+             params.video_script_prompt = st.text_area(
+                 tr("Custom Script Requirements"),
+@@ -940,6 +1034,24 @@ with left_panel:
+                 key="video_script_prompt",
+             ).strip()
+ 
++            enable_web_search = st.checkbox(
++                tr("Enable Web Search"),
++                value=bool(config.app.get("enable_web_search", False)),
++                key="enable_web_search",
++                help=tr("Enable Web Search Help")
++            )
++            params.enable_web_search = enable_web_search
++            
++            if enable_web_search:
++                web_search_max_steps = st.slider(
++                    tr("Max Search Steps"),
++                    min_value=1,
++                    max_value=5,
++                    value=int(config.app.get("web_search_max_steps", 3)),
++                    key="web_search_max_steps"
++                )
++                params.web_search_max_steps = web_search_max_steps
++
+             use_custom_system_prompt = st.checkbox(
+                 tr("Use Custom System Prompt"),
+                 help=tr("Use Custom System Prompt Help"),
+@@ -959,12 +1071,12 @@ with left_panel:
+                 params.custom_system_prompt = ""
+ 
+         # 蜍慕判繧ｿ繧､繝医Ν蜈･蜉・-        saved_video_title = st.session_state.get("video_title", "")
++        saved_video_title = config.app.get("video_title", "")
+         params.video_title = st.text_input(
+             tr("Video Title"),
+             value=saved_video_title,
++            key="video_title",
+         ).strip()
+-        st.session_state["video_title"] = params.video_title
+ 
+         if st.button(
+             tr("Generate Video Script and Keywords"), key="auto_generate_script"
+@@ -995,70 +1107,7 @@ with left_panel:
+                     terms = llm.generate_terms(
+                         params.video_subject,
+                         script,
+-                        amount=8 if params.match_materials_to_script else 5,
+-                        match_script_order=params.match_materials_to_script,
+-                    )
+-                    
+-                    if "Error: " in terms:
+-                        st.error(tr(terms))
+-                    else:
+-                        st.session_state["video_script"] = script
+-                        st.session_state["video_terms"] = ", ".join(terms)
+-                        st.rerun()
+-
+-        params.video_script = st.text_area(
+-            tr("Video Script"), value=st.session_state["video_script"], height=280
+-        )
+-        
+-        # 繧ｿ繧､繝医Ν繝ｻ繝上う繝ｩ繧､繝・I逕滓・繝懊ち繝ｳ
+-        title_btn_cols = st.columns([0.5, 0.5])
+-        with title_btn_cols[0]:
+-            if st.button(tr("Generate Title from Script (AI)"), key="auto_generate_title"):
+-                if not params.video_script:
+-                    st.error(tr("Please Enter or Generate the Video Script First"))
+-                else:
+-                    with st.spinner(tr("Generating Video Title")):
+-                        title = llm.generate_title(params.video_script)
+-                        st.session_state["video_title"] = title
+-                        st.rerun()
+-        with title_btn_cols[1]:
+-            if st.button(tr("Highlight Script with AI Tags"), key="auto_highlight_script"):
+-                if not params.video_script:
+-                    st.error(tr("Please Enter or Generate the Video Script First"))
+-                else:
+-                    with st.spinner(tr("Highlighting Video Script and Title")):
+-                        highlighted = llm.highlight_script_with_llm(params.video_script)
+-                        st.session_state["video_script"] = highlighted
+-                        current_title = st.session_state.get("video_title", "")
+-                        if current_title:
+-                            st.session_state["video_title"] = llm.highlight_title_with_llm(current_title)
+-                        st.rerun()
+-
+-        if st.button(tr("Generate Video Keywords"), key="auto_generate_terms"):
+-            if not params.video_script:
+-                st.error(tr("Please Enter the Video Subject"))
+-                st.stop()
+-
+-            with st.spinner(tr("Generating Video Keywords")):
+-                terms = llm.generate_terms(
+-                    params.video_subject,
+-                    params.video_script,
+-                    amount=8 if params.match_materials_to_script else 5,
+-                    match_script_order=params.match_materials_to_script,
+-                )
+-                if "Error: " in terms:
+-                    st.error(tr(terms))
+-                else:
+-                    st.session_state["video_terms"] = ", ".join(terms)
+-
+-        params.video_terms = st.text_area(
+-            tr("Video Keywords"), value=st.session_state["video_terms"]
+-        )
+-
+-with middle_panel:
+-    with st.container(border=True):
+-        st.write(tr("Video Settings"))
+-        video_concat_modes = [
++                        amou        video_concat_modes = [
+             (tr("Sequential"), "sequential"),
+             (tr("Random"), "random"),
+         ]
+@@ -1073,21 +1122,21 @@ with middle_panel:
+         ]
+ 
+         saved_video_source_name = config.app.get("video_source", "pexels")
+-        saved_video_source_index = [v[1] for v in video_sources].index(
+-            saved_video_source_name
+-        )
++        source_values = [v[1] for v in video_sources]
++        if saved_video_source_name not in source_values:
++            saved_video_source_name = "pexels"
++        saved_video_source_index = source_values.index(saved_video_source_name)
+ 
+-        selected_index = st.selectbox(
++        selected_source = st.selectbox(
+             tr("Video Source"),
+-            options=range(len(video_sources)),
+-            format_func=lambda x: video_sources[x][0],
++            options=source_values,
++            format_func=lambda x: dict((v[1], v[0]) for v in video_sources)[x],
+             index=saved_video_source_index,
++            key="video_source",
+         )
+-        params.video_source = video_sources[selected_index][1]
+-        config.app["video_source"] = params.video_source
++        params.video_source = selected_source
+ 
+         if params.video_source == "local":
+-            # Streamlit 逧・枚莉ｶ邀ｻ蝙区｡鬪悟ｯｹ謇ｩ螻募錐螟ｧ蟆丞・謨乗─・瑚ｿ咎㈹蜷梧慮謾ｾ陦悟､ｧ蟆丞・荳､遘榊ｽ｢蠑上・             local_file_types = ["mp4", "mov", "avi", "flv", "mkv", "jpg", "jpeg", "png"]
+             uploaded_files = st.file_uploader(
+                 tr("Upload Local Files"),
+@@ -1096,18 +1145,19 @@ with middle_panel:
+             )
+ 
+         saved_concat_mode = config.app.get("video_concat_mode", "random")
+-        saved_concat_index = 0 if saved_concat_mode == "sequential" else 1
+-        selected_index = st.selectbox(
++        concat_values = [v[1] for v in video_concat_modes]
++        if saved_concat_mode not in concat_values:
++            saved_concat_mode = "random"
++        saved_concat_index = concat_values.index(saved_concat_mode)
++        
++        selected_concat = st.selectbox(
+             tr("Video Concat Mode"),
+             index=saved_concat_index,
+-            options=range(len(video_concat_modes)),
+-            format_func=lambda x: video_concat_modes[x][0],
++            options=concat_values,
++            format_func=lambda x: dict((v[1], v[0]) for v in video_concat_modes)[x],
+             key="video_concat_mode",
+         )
+-        params.video_concat_mode = VideoConcatMode(
+-            video_concat_modes[selected_index][1]
+-        )
+-        config.app["video_concat_mode"] = params.video_concat_mode.value
++        params.video_concat_mode = VideoConcatMode(selected_concat)
+ 
+         # 隗・｢題ｽｬ蝨ｺ讓｡蠑・         video_transition_modes = [
+@@ -1119,44 +1169,38 @@ with middle_panel:
+             (tr("SlideOut"), VideoTransitionMode.slide_out.value),
+         ]
+         saved_transition_mode = config.app.get("video_transition_mode", None)
+-        saved_transition_index = 0
+-        for i, (_, mode_val) in enumerate(video_transition_modes):
+-            if mode_val == saved_transition_mode:
+-                saved_transition_index = i
+-                break
+-        selected_index = st.selectbox(
++        transition_values = [v[1] for v in video_transition_modes]
++        if saved_transition_mode not in transition_values:
++            saved_transition_mode = None
++        saved_transition_index = transition_values.index(saved_transition_mode)
++        
++        selected_transition = st.selectbox(
+             tr("Video Transition Mode"),
+-            options=range(len(video_transition_modes)),
+-            format_func=lambda x: video_transition_modes[x][0],
++            options=transition_values,
++            format_func=lambda x: dict((v[1], v[0]) for v in video_transition_modes)[x],
+             index=saved_transition_index,
+             key="video_transition_mode",
+         )
+-        params.video_transition_mode = VideoTransitionMode(
+-            video_transition_modes[selected_index][1]
+-        )
+-        config.app["video_transition_mode"] = params.video_transition_mode.value if params.video_transition_mode else None
++        params.video_transition_mode = VideoTransitionMode(selected_transition)
+ 
+         video_aspect_ratios = [
+             (tr("Portrait"), VideoAspect.portrait.value),
+             (tr("Landscape"), VideoAspect.landscape.value),
+         ]
+-        # Coverr 蠎・99% 譏ｯ 16:9 讓ｪ螻・鮟倩ｮ､遶門ｱ丈ｼ夊ｮｩ逕ｻ髱｢陲ｫ螟ｧ驥城ｻ題ｾｹ蛹・峩縲・-        # 繝励Μ繧ｻ繝・ヨ繧｢繧ｹ繝壹け繝医ｒ蜆ｪ蜈医＠縲∫┌縺代ｌ縺ｰ繝・ヵ繧ｩ繝ｫ繝医う繝ｳ繝・ャ繧ｯ繧ｹ繧定ｨ育ｮ・         saved_aspect = config.app.get("video_aspect", VideoAspect.portrait.value)
+         aspect_values = [v[1] for v in video_aspect_ratios]
+-        if saved_aspect in aspect_values:
+-            default_aspect_index = aspect_values.index(saved_aspect)
+-        else:
+-            default_aspect_index = 1 if params.video_source == "coverr" else 0
+-        selected_index = st.selectbox(
++        if saved_aspect not in aspect_values:
++            saved_aspect = aspect_values[1] if params.video_source == "coverr" else aspect_values[0]
++        default_aspect_index = aspect_values.index(saved_aspect)
++        
++        selected_aspect = st.selectbox(
+             tr("Video Ratio"),
+-            options=range(len(video_aspect_ratios)),
+-            format_func=lambda x: video_aspect_ratios[x][0],
++            options=aspect_values,
++            format_func=lambda x: dict((v[1], v[0]) for v in video_aspect_ratios)[x],
+             index=default_aspect_index,
+             key="video_aspect",
+         )
+-        params.video_aspect = VideoAspect(video_aspect_ratios[selected_index][1])
+-        config.app["video_aspect"] = params.video_aspect.value
++        params.video_aspect = VideoAspect(selected_aspect)
+ 
+         # Video clip fit mode: contain or cover
+         video_clip_fits = [
+@@ -1164,16 +1208,19 @@ with middle_panel:
+             (tr("Cover"), "cover"),
+         ]
+         saved_fit_mode = config.app.get("video_clip_fit", "contain").lower()
+-        saved_fit_index = 1 if saved_fit_mode == "cover" else 0
+-        selected_index = st.selectbox(
++        fit_values = [v[1] for v in video_clip_fits]
++        if saved_fit_mode not in fit_values:
++            saved_fit_mode = "contain"
++        saved_fit_index = fit_values.index(saved_fit_mode)
++        
++        selected_fit = st.selectbox(
+             tr("Fit Mode"),
+-            options=range(len(video_clip_fits)),
+-            format_func=lambda x: video_clip_fits[x][0],
++            options=fit_values,
++            format_func=lambda x: dict((v[1], v[0]) for v in video_clip_fits)[x],
+             index=saved_fit_index,
+-            key=f"video_clip_fit_for_{params.video_source}",
++            key="video_clip_fit",
+         )
+-        params.video_clip_fit = video_clip_fits[selected_index][1]
+-        config.app["video_clip_fit"] = params.video_clip_fit
++        params.video_clip_fit = selected_fit
+ 
+         saved_duration = config.app.get("video_clip_duration", 5)
+         options = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+@@ -1184,7 +1231,6 @@ with middle_panel:
+             index=saved_duration_index,
+             key="video_clip_duration",
+         )
+-        config.app["video_clip_duration"] = params.video_clip_duration
+ 
+         saved_count = config.app.get("video_count", 1)
+         count_options = [1, 2, 3, 4, 5]
+@@ -1195,17 +1241,13 @@ with middle_panel:
+             index=saved_count_index,
+             key="video_count",
+         )
+-        config.app["video_count"] = params.video_count
+ 
+         with st.expander(tr("Advanced Video Settings"), expanded=False):
+-            # 鮟倩ｮ､蜈ｳ髣ｭ・碁∩蜈榊ｽｱ蜩崎∫畑謌ｷ逧・囂譛ｺ邏譚蝉ｽ馴ｪ後ょｼ蜷ｯ蜷主宵謾ｹ蜿伜・髞ｮ隸榊柱邏譚・-            # 荳玖ｽｽ/諡ｼ謗･鬘ｺ蠎擾ｼ檎畑莠取隼蝟・判髱｢荳ｻ鬚俶掠莠取・譎壻ｺ取浴逋ｽ逧・琉鬚倥・             params.match_materials_to_script = st.checkbox(
+                 tr("Match Materials to Script Order"),
+                 help=tr("Match Materials to Script Order Help"),
+                 key="match_materials_to_script",
+             )
+-            config.app["match_materials_to_script"] = params.match_materials_to_script
+ 
+             video_codec_options = [
+                 ("libx264 (CPU)", "libx264"),
+@@ -1216,13 +1258,81 @@ with middle_panel:
+                 ("macOS VideoToolbox (h264_videotoolbox)", "h264_videotoolbox"),
+             ]
+             saved_video_codec = config.app.get("video_codec", "libx264")
+-            saved_video_codec_values = [item[1] for item in video_codec_options]
+-            if saved_video_codec not in saved_video_codec_values:
++            codec_values = [item[1] for item in video_codec_options]
++            if saved_video_codec not in codec_values:
+                 saved_video_codec = "libx264"
+-            selected_codec_index = saved_video_codec_values.index(saved_video_codec)
+-            selected_codec_index = st.selectbox(
++            selected_codec_index = codec_values.index(saved_video_codec)
++            
++            selected_codec = st.selectbox(
+                 tr("Video Encoder"),
+-                options=range(len(video_codec_options)),
++                options=codec_values,
++                index=selected_codec_index,
++                format_func=lambda x: dict((item[1], item[0]) for item in video_codec_options)[x],
++                help=tr("Video Encoder Help"),
++                key="video_codec",
++            )
++            params.video_codec = selected_codec
++
++            # 蜍慕判荳贋ｸ九・繝ｼ繧ｸ繝ｳ
++            st.write("---")
++            saved_video_margin_ratio = config.ui.get("video_margin_ratio", 0.0)
++            params.video_margin_ratio = st.slider(
++                tr("Video Margin Ratio (Top/Bottom)"),
++                0.0, 0.45, saved_video_margin_ratio, step=0.01,
++                help=tr("Video Margin Ratio Help"),
++                key="video_margin_ratio",
++            )
++
++            # 閭梧勹蜍慕判・・繝ｬ繧､繝､繝ｼ蜷域・・芽ｨｭ螳・+            st.write("---")
++            st.write(tr("2-Layer Background Video Settings"))
++            bg_video_options = [
++                (tr("None"), "none"),
++                (tr("Random Background Video"), "random"),
++                (tr("Source Background Video"), "source"),
++                (tr("Custom Background Video File"), "custom"),
++            ]
++            saved_bg_video_type = config.ui.get("bg_video_type", "none")
++            bg_type_values = [v[1] for v in bg_video_options]
++            if saved_bg_video_type not in bg_type_values:
++                saved_bg_video_type = "none"
++            saved_bg_index = bg_type_values.index(saved_bg_video_type)
++                    
++            selected_bg_type = st.selectbox(
++                tr("Background Video Type"),
++                options=bg_type_values,
++                index=saved_bg_index,
++                key="bg_video_type",
++                format_func=lambda x: dict((v[1], v[0]) for v in bg_video_options)[x],
++            )
++            params.bg_video_type = selected_bg_type
++            
++            if params.bg_video_type == "custom":
++                bg_dir = utils.resource_dir("bg_videos")
++                if not os.path.exists(bg_dir):
++                    os.makedirs(bg_dir, exist_ok=True)
++                bg_files = []
++                for ext in ["*.mp4", "*.mkv", "*.mov", "*.avi"]:
++                    bg_files.extend(glob.glob(os.path.join(bg_dir, ext)))
++                bg_filenames = sorted([os.path.basename(f) for f in bg_files])
++                
++                if not bg_filenames:
++                    st.warning(tr("No background videos found in resource/bg_videos"))
++                    params.bg_video_file = ""
++                else:
++                    saved_bg_video_file = config.ui.get("bg_video_file", "")
++                    try:
++                        saved_bg_file_index = bg_filenames.index(saved_bg_video_file)
++                    except ValueError:
++                        saved_bg_file_index = 0
++                        
++                    selected_bg_file = st.selectbox(
++                        tr("Custom Background Video File"),
++                        options=bg_filenames,
++                        index=saved_bg_file_index,
++                        key="bg_video_file"
++                    )
++                    params.bg_video_file = selected_bg_filedeo_codec_options)),
+                 index=selected_codec_index,
+                 format_func=lambda x: video_codec_options[x][0],
+                 help=tr("Video Encoder Help"),
+@@ -1245,6 +1355,7 @@ with middle_panel:
+             bg_video_options = [
+                 (tr("None"), "none"),
+                 (tr("Random Background Video"), "random"),
++                (tr("Source Background Video"), "source"),
+                 (tr("Custom Background Video File"), "custom"),
+             ]
+             saved_bg_video_type = config.ui.get("bg_video_type", "none")
+@@ -1258,19 +1369,39 @@ with middle_panel:
+                 tr("Background Video Type"),
+                 options=range(len(bg_video_options)),
+                 index=saved_bg_index,
++                key="bg_video_type_selectbox",
+                 format_func=lambda x: bg_video_options[x][0],
+             )
+             params.bg_video_type = bg_video_options[selected_bg_index][1]
+             config.ui["bg_video_type"] = params.bg_video_type
+             
+             if params.bg_video_type == "custom":
+-                saved_bg_video_file = config.ui.get("bg_video_file", "")
+-                params.bg_video_file = st.text_input(
+-                    tr("Custom Background Video File Path"),
+-                    value=saved_bg_video_file,
+-                    key="custom_bg_video_file_input",
+-                )
+-                config.ui["bg_video_file"] = params.bg_video_file
++                bg_dir = utils.resource_dir("bg_videos")
++                if not os.path.exists(bg_dir):
++                    os.makedirs(bg_dir, exist_ok=True)
++                bg_files = []
++                for ext in ["*.mp4", "*.mkv", "*.mov", "*.avi"]:
++                    bg_files.extend(glob.glob(os.path.join(bg_dir, ext)))
++                bg_filenames = sorted([os.path.basename(f) for f in bg_files])
++                
++                if not bg_filenames:
++                    st.warning(tr("No background videos found in resource/bg_videos"))
++                    params.bg_video_file = ""
++                else:
++                    saved_bg_video_file = config.ui.get("bg_video_file", "")
++                    try:
++                        saved_bg_file_index = bg_filenames.index(saved_bg_video_file)
++                    except ValueError:
++                        saved_bg_file_index = 0
++                        
++                    selected_bg_file = st.selectbox(
++                        tr("Custom Background Video File"),
++                        options=bg_filenames,
++                        index=saved_bg_file_index,
++                        key="custom_bg_video_file_selectbox"
++                    )
++                    params.bg_video_file = selected_bg_file
++                    config.ui["bg_video_file"] = params.bg_video_file
+     with st.container(border=True):
+         st.write(tr("Audio Settings"))
+ 
+@@ -1299,6 +1430,7 @@ with middle_panel:
+             options=range(len(tts_servers)),
+             format_func=lambda x: tts_servers[x][1],
+             index=saved_tts_server_index,
++            key="tts_server_selectbox",
+         )
+ 
+         selected_tts_server = tts_servers[selected_tts_server_index][0]
+@@ -1386,6 +1518,7 @@ with middle_panel:
+                 index=min(saved_voice_name_index, len(friendly_names) - 1)
+                 if friendly_names
+                 else 0,
++                key="voice_name_selectbox",
+             )
+ 
+             voice_name = list(friendly_names.keys())[

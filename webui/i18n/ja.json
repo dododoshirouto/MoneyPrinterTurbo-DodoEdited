@@ -215,6 +215,9 @@
     "Video Source": "動画素材ソースから取得",
     "Custom Background Video": "カスタム背景動画（ローカル）",
     "No background videos found in resource/bg_videos": "resource/bg_videos に背景動画が見つかりません",
-    "Select Background Video": "背景動画の選択"
+    "Select Background Video": "背景動画の選択",
+    "Source Background Video": "素材ソースから背景動画を取得",
+    "GPU Device (CUDA_VISIBLE_DEVICES)": "使用するGPU (CUDA_VISIBLE_DEVICES)",
+    "GPU Device Help": "使用するNVIDIA GPUデバイスIDを指定します（例: 0 や 1。複数指定は 0,1。空欄の場合はすべてのGPUを使用）"
   }
 }
