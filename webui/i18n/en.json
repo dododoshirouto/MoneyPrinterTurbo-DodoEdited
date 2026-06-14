@@ -188,6 +188,11 @@
     "Save Search Preset": "Save search instructions as preset",
     "Load Search Preset": "Load preset",
     "Search Preset Saved": "Search instruction preset saved",
-    "No Search Presets": "No search instruction presets saved"
+    "No Search Presets": "No search instruction presets saved",
+    "Export Preset": "Export preset",
+    "Import Preset": "Import preset (.json)",
+    "Preset Imported": "Preset imported",
+    "One Click Generate": "⚡ One-click Generate",
+    "One Click Subject Placeholder": "Enter video subject and click generate..."
   }
 }

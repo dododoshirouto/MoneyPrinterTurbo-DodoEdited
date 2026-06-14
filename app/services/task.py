@@ -72,6 +72,11 @@ def generate_script(task_id, params):
         logger.error("failed to generate video script.")
         return None
 
+    # 色強調タグが有効で、かつスクリプトを今回自動生成した場合のみハイライトを付与
+    if not params.video_script.strip() and getattr(params, "text_color_highlight_enabled", False):
+        logger.info("applying color highlight tags to script")
+        video_script = llm.highlight_script_with_llm(video_script)
+
     return video_script
 
 

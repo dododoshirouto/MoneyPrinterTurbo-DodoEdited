@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import webbrowser
@@ -242,6 +243,8 @@ def _apply_preset_data(raw_data: dict) -> None:
         )
 
 
+if "_one_click_pending" not in st.session_state:
+    st.session_state["_one_click_pending"] = False
 if "video_subject" not in st.session_state:
     st.session_state["video_subject"] = ""
 if "video_script" not in st.session_state:
@@ -514,6 +517,66 @@ with preset_cols[2]:
 
 # ロード処理はon_preset_selectedコールバックに移行されました。
 
+# プリセット エクスポート / インポート
+exp_col, imp_col = st.columns([1, 1])
+with exp_col:
+    _exp_data = preset_dict.get(selected_preset) if selected_preset else None
+    if _exp_data:
+        st.download_button(
+            tr("Export Preset"),
+            data=json.dumps(_exp_data, ensure_ascii=False, indent=2),
+            file_name=f"{selected_preset}.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+    else:
+        st.button(tr("Export Preset"), disabled=True, use_container_width=True)
+with imp_col:
+    _imported_file = st.file_uploader(
+        tr("Import Preset"),
+        type=["json"],
+        key="import_preset_uploader",
+        label_visibility="collapsed",
+    )
+    if _imported_file is not None:
+        try:
+            _imp_data = json.loads(_imported_file.read().decode("utf-8"))
+            _imp_name = os.path.splitext(_imported_file.name)[0]
+            if presets.save_preset(_imp_name, _imp_data):
+                st.success(f"{tr('Preset Imported')}: {_imp_name}")
+                st.rerun()
+        except Exception as _e:
+            st.error(f"Import failed: {_e}")
+
+st.write("---")
+
+# ワンクリック生成エリア（GUIトップ）
+with st.container(border=True):
+    _oc_left, _oc_right = st.columns([5, 2])
+    with _oc_left:
+        _oc_subject = st.text_input(
+            tr("Video Subject"),
+            value=st.session_state.get("video_subject", ""),
+            key="one_click_subject_input",
+            placeholder=tr("One Click Subject Placeholder"),
+            label_visibility="collapsed",
+        )
+    with _oc_right:
+        _oc_clicked = st.button(
+            tr("One Click Generate"),
+            use_container_width=True,
+            type="primary",
+        )
+    if _oc_clicked:
+        if not _oc_subject.strip():
+            st.error(tr("Please Enter the Video Subject"))
+        else:
+            st.session_state["video_subject"] = _oc_subject.strip()
+            st.session_state["video_script"] = ""
+            st.session_state["video_terms"] = ""
+            st.session_state["video_title"] = ""
+            st.session_state["_one_click_pending"] = True
+            st.rerun()
 
 st.write("---")
 
@@ -2122,7 +2185,12 @@ with right_panel:
                     st.success(tr("Coverr API Key deleted successfully"))
 
 start_button = st.button(tr("Generate Video"), use_container_width=True, type="primary")
-if start_button:
+_one_click_fire = st.session_state.pop("_one_click_pending", False)
+if start_button or _one_click_fire:
+    if _one_click_fire:
+        # ワンクリック生成: スクリプト・キーワードを強制クリアして自動生成させる
+        params.video_script = ""
+        params.video_terms = None
     config.save_config()
     raw_uuid = str(uuid4())
     task_id = utils.render_task_folder_name(params, raw_uuid)

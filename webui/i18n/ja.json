@@ -233,6 +233,11 @@
     "Save Search Preset": "検索指示をプリセットとして保存",
     "Load Search Preset": "プリセットを読み込む",
     "Search Preset Saved": "検索指示プリセットを保存しました",
-    "No Search Presets": "保存された検索指示プリセットはありません"
+    "No Search Presets": "保存された検索指示プリセットはありません",
+    "Export Preset": "プリセットをエクスポート",
+    "Import Preset": "プリセットをインポート (.json)",
+    "Preset Imported": "プリセットをインポートしました",
+    "One Click Generate": "⚡ ワンクリック生成",
+    "One Click Subject Placeholder": "動画テーマを入力してクリック…"
   }
 }
