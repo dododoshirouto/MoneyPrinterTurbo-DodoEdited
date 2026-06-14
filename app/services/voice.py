@@ -653,7 +653,7 @@ def stream_edge_tts_chunks(
         timeout_seconds: 单次流式请求总超时；为 None 时不启用超时。
     """
     if hasattr(communicate, "stream_sync"):
-        if timeout_seconds:
+        if timeout_seconds is not None:
             _stream_edge_tts_sync_with_timeout(
                 communicate, on_chunk, timeout_seconds
             )
@@ -795,7 +795,7 @@ def siliconflow_tts(
                 f"start siliconflow tts, model: {model}, voice: {voice}, try: {i + 1}"
             )
 
-            response = requests.post(url, json=payload, headers=headers)
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
 
             if response.status_code == 200:
                 # 保存音频文件
@@ -806,6 +806,7 @@ def siliconflow_tts(
                 sub_maker = ensure_legacy_submaker_fields(SubMaker())
 
                 # 获取音频文件的实际长度
+                audio_duration_100ns = 100000000  # fallback: 10 seconds
                 try:
                     # 尝试使用moviepy获取音频长度
                     from moviepy import AudioFileClip
@@ -852,17 +853,8 @@ def siliconflow_tts(
 
                 except Exception as e:
                     logger.warning(f"Failed to create accurate subtitles: {str(e)}")
-                    # 回退到简单的字幕
                     sub_maker.subs = [text]
-                    # 使用音频文件的实际长度，如果无法获取，则假设为10秒
-                    sub_maker.offset = [
-                        (
-                            0,
-                            audio_duration_100ns
-                            if "audio_duration_100ns" in locals()
-                            else 10000000,
-                        )
-                    ]
+                    sub_maker.offset = [(0, audio_duration_100ns)]
 
                 logger.success(f"siliconflow tts succeeded: {voice_file}")
                 logger.debug(
@@ -881,10 +873,11 @@ def siliconflow_tts(
 
 
 def azure_tts_v2(text: str, voice_name: str, voice_file: str) -> Union[SubMaker, None]:
+    _original_voice_name = voice_name
     voice_name = is_azure_v2_voice(voice_name)
     if not voice_name:
-        logger.error(f"invalid voice name: {voice_name}")
-        raise ValueError(f"invalid voice name: {voice_name}")
+        logger.error(f"invalid voice name: {_original_voice_name}")
+        raise ValueError(f"invalid voice name: {_original_voice_name}")
     text = text.strip()
 
     def _format_duration_to_offset(duration) -> int:
@@ -1022,7 +1015,7 @@ def voicevox_tts(
     
     synthesis_url = f"{base_url}/synthesis"
     headers = {"Content-Type": "application/json"}
-    wav_file = voice_file.replace(".mp3", ".wav")
+    wav_file = os.path.splitext(voice_file)[0] + ".wav"
     
     try:
         logger.info(f"start {tts_type} tts synthesis, speaker: {speaker_id}")

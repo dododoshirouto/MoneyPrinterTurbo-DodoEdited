@@ -177,6 +177,9 @@ _UI_PRESERVED_KEYS: set[str] = {
     "top_language_selector", "selected_preset_selector", "ui_language",
     "video_subject", "video_script", "video_terms", "video_title",
     "preset_loaded_message", "video_title_enabled",
+    # Expander open/close states
+    "exp_basic_settings", "exp_advanced_script", "exp_web_search",
+    "exp_advanced_video", "exp_api_key_mgmt", "exp_youtube_settings",
 }
 
 _BG_VIDEO_OPTIONS = ["none", "random", "source", "custom"]
@@ -258,7 +261,7 @@ if "video_script" not in st.session_state:
 if "video_terms" not in st.session_state:
     st.session_state["video_terms"] = ""
 if "video_script_prompt" not in st.session_state:
-    st.session_state["video_script_prompt"] = ""
+    st.session_state["video_script_prompt"] = config.app.get("video_script_prompt", "")
 if "custom_system_prompt" not in st.session_state:
     st.session_state["custom_system_prompt"] = llm.DEFAULT_SCRIPT_SYSTEM_PROMPT
 if "use_custom_system_prompt" not in st.session_state:
@@ -507,6 +510,7 @@ with preset_cols[2]:
         if new_preset_name.strip():
             preset_data = _collect_preset_data()
             if presets.save_preset(new_preset_name.strip(), preset_data):
+                config.save_config()
                 st.success(tr("Preset saved successfully"))
                 st.rerun()
         else:
@@ -588,7 +592,7 @@ st.write("---")
 
 # 创建基础设置折叠框
 if not config.app.get("hide_config", False):
-    with st.expander(tr("Basic Settings"), expanded=False):
+    with st.expander(tr("Basic Settings"), expanded=False, key="exp_basic_settings"):
         config_panels = st.columns(3)
         left_config_panel = config_panels[0]
         middle_config_panel = config_panels[1]
@@ -1128,7 +1132,7 @@ with left_panel:
         )
         params.video_language = video_languages[selected_index][1]
 
-        with st.expander(tr("Advanced Script Settings"), expanded=False):
+        with st.expander(tr("Advanced Script Settings"), expanded=False, key="exp_advanced_script"):
             params.paragraph_number = st.slider(
                 tr("Script Paragraph Number"),
                 min_value=llm.MIN_SCRIPT_PARAGRAPH_NUMBER,
@@ -1164,7 +1168,7 @@ with left_panel:
                 params.custom_system_prompt = ""
 
         # Web検索設定
-        with st.expander(tr("Web Search Settings"), expanded=False):
+        with st.expander(tr("Web Search Settings"), expanded=False, key="exp_web_search"):
             params.web_search_enabled = st.checkbox(
                 tr("Enable Web Search"),
                 help=tr("Enable Web Search Help"),
@@ -1470,7 +1474,7 @@ with middle_panel:
         )
         config.app["video_count"] = params.video_count
 
-        with st.expander(tr("Advanced Video Settings"), expanded=False):
+        with st.expander(tr("Advanced Video Settings"), expanded=False, key="exp_advanced_video"):
             # 默认关闭，避免影响老用户的随机素材体验。开启后只改变关键词和素材
             # 下载/拼接顺序，用于改善画面主题早于或晚于旁白的问题。
             params.match_materials_to_script = st.checkbox(
@@ -2103,7 +2107,7 @@ with right_panel:
             with c3_cols[2]:
                 params.color3_stroke_width = st.slider(tr("Color 3 Border Width"), 0.0, 10.0, saved_color3_stroke_width, key="color3_stroke_width_slider")
                 config.ui["color3_stroke_width"] = params.color3_stroke_width
-    with st.expander(tr("Click to show API Key management"), expanded=False):
+    with st.expander(tr("Click to show API Key management"), expanded=False, key="exp_api_key_mgmt"):
         st.subheader(tr("Manage Pexels, Pixabay and Coverr API Keys"))
 
         col1, col2, col3 = st.tabs([
@@ -2212,7 +2216,7 @@ with right_panel:
 # ---------------------------------------------------------------------------
 from app.services import youtube as _yt
 
-with st.expander(tr("YouTube Settings"), expanded=False):
+with st.expander(tr("YouTube Settings"), expanded=False, key="exp_youtube_settings"):
     params.youtube_enabled = st.checkbox(
         tr("Enable YouTube Upload"),
         value=config.app.get("youtube_enabled", False),
@@ -2249,7 +2253,8 @@ with st.expander(tr("YouTube Settings"), expanded=False):
             label_visibility="collapsed",
         )
         _yt_connect_clicked = _yt_add_cols[1].button(
-            tr("YouTube Connect"), key="yt_connect", use_container_width=True
+            tr("YouTube Connect"), key="yt_connect", use_container_width=True,
+            disabled=st.session_state.get("_yt_login_waiting", False),
         )
 
         _yt_waiting = st.session_state.get("_yt_login_waiting", False)

@@ -23,6 +23,8 @@ import threading
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
+_lock = threading.Lock()
+
 from loguru import logger
 
 from app.config import config
@@ -48,6 +50,8 @@ _REDIRECT_URI  = f"http://localhost:{_CALLBACK_PORT}"
 _oauth_result: dict = {}
 # PKCE verifier stored here so the callback thread can read it
 _pkce_verifier: str = ""
+# True while a callback server is listening on _CALLBACK_PORT
+_server_running: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -226,11 +230,16 @@ def start_login(nickname: str) -> str:
 
     Returns the auth URL string on success, or "" on configuration error.
     """
-    global _oauth_result, _pkce_verifier
-    _oauth_result = {}
+    global _oauth_result, _pkce_verifier, _server_running
+    with _lock:
+        if _server_running:
+            logger.warning("YouTube OAuth server already running — ignoring duplicate start_login() call")
+            return ""
+        _oauth_result = {}
 
     if not is_app_configured():
-        _oauth_result = {"error": "YouTube Client ID not configured. Enter it in Basic Settings."}
+        with _lock:
+            _oauth_result = {"error": "YouTube Client ID not configured. Enter it in Basic Settings."}
         return ""
 
     import urllib.parse as _up
@@ -302,20 +311,24 @@ def start_login(nickname: str) -> str:
                         logger.info(f"YouTube token response: {token_data}")
                         if "access_token" in token_data:
                             _save_token(nickname, token_data)
-                            _oauth_result["success"] = True
-                            _oauth_result["nickname"] = nickname
+                            with _lock:
+                                _oauth_result["success"] = True
+                                _oauth_result["nickname"] = nickname
                             body = _html_ok()
                         else:
                             err = token_data.get("error_description") or token_data.get("error") or str(token_data)
                             logger.error(f"YouTube token exchange failed: {err}")
-                            _oauth_result["error"] = err
+                            with _lock:
+                                _oauth_result["error"] = err
                             body = _html_ng(err)
                     except Exception as ex:
                         logger.error(f"YouTube token exchange exception: {ex}")
-                        _oauth_result["error"] = str(ex)
+                        with _lock:
+                            _oauth_result["error"] = str(ex)
                         body = _html_ng(str(ex))
                 else:
-                    _oauth_result["error"] = error or "cancelled"
+                    with _lock:
+                        _oauth_result["error"] = error or "cancelled"
                     body = _html_ng(error or "cancelled")
 
                 self.send_response(200)
@@ -326,13 +339,20 @@ def start_login(nickname: str) -> str:
             def log_message(self, *args):
                 pass
 
+        global _server_running
+        with _lock:
+            _server_running = True
         try:
             # Bind to 0.0.0.0 so requests from the host browser (via Docker port mapping) reach us
             server = HTTPServer(("0.0.0.0", _CALLBACK_PORT), _Handler)
             server.timeout = 300
             server.handle_request()
         except Exception as ex:
-            _oauth_result["error"] = str(ex)
+            with _lock:
+                _oauth_result["error"] = str(ex)
+        finally:
+            with _lock:
+                _server_running = False
 
     threading.Thread(target=_serve, daemon=True).start()
     return auth_url
@@ -340,7 +360,8 @@ def start_login(nickname: str) -> str:
 
 def oauth_result() -> dict:
     """Return the current OAuth result (may be empty if still in progress)."""
-    return dict(_oauth_result)
+    with _lock:
+        return dict(_oauth_result)
 
 
 # ---------------------------------------------------------------------------
