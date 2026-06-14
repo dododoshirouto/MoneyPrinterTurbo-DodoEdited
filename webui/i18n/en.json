@@ -173,6 +173,21 @@
     "Select Background Video": "Select Background Video",
     "Source Background Video": "Source Background Video",
     "GPU Device (CUDA_VISIBLE_DEVICES)": "GPU Device (CUDA_VISIBLE_DEVICES)",
-    "GPU Device Help": "Specify the NVIDIA GPU Device ID to use (e.g., 0 or 1, or 0,1 for multiple GPUs. Leave empty to use all GPUs)"
+    "GPU Device Help": "Specify the NVIDIA GPU Device ID to use (e.g., 0 or 1, or 0,1 for multiple GPUs. Leave empty to use all GPUs)",
+    "Web Search Settings": "Web Search Settings (gather info before script generation)",
+    "Enable Web Search": "Enable Web Search",
+    "Enable Web Search Help": "When enabled, AI will automatically search the web to gather information before generating the script.",
+    "Web Search Instructions": "Search Instructions (optional)",
+    "Web Search Instructions Placeholder": "Example: find latest statistics, gather expert opinions, research case studies",
+    "Web Search Max Steps": "Max Search Steps",
+    "Web Search Provider": "Search Provider",
+    "Researching": "Gathering information via web search...",
+    "Research Step": "Search step {step}/{total}: {message}",
+    "Web Search Preset Instructions": "Search Instruction Presets",
+    "Web Search Preset Placeholder": "Preset name",
+    "Save Search Preset": "Save search instructions as preset",
+    "Load Search Preset": "Load preset",
+    "Search Preset Saved": "Search instruction preset saved",
+    "No Search Presets": "No search instruction presets saved"
   }
 }

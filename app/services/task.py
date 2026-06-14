@@ -1,3 +1,4 @@
+import json
 import math
 import os.path
 import re
@@ -10,7 +11,35 @@ from app.models import const
 from app.models.schema import VideoConcatMode, VideoParams
 from app.services import llm, material, subtitle, video, voice, upload_post
 from app.services import state as sm
+from app.services import research_agent
 from app.utils import utils
+
+
+def run_research(task_id, params) -> str:
+    """Run the research agent if web_search_enabled. Returns research context string."""
+    if not getattr(params, "web_search_enabled", False):
+        return ""
+
+    logger.info("\n\n## running web research agent")
+    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=5)
+
+    result = research_agent.run_research(
+        subject=params.video_subject,
+        instructions=getattr(params, "web_search_prompt", ""),
+        max_steps=getattr(params, "web_search_max_steps", 3),
+    )
+
+    # Save research log alongside script.json
+    research_file = path.join(utils.task_dir(task_id), "research.json")
+    with open(research_file, "w", encoding="utf-8") as f:
+        json.dump(result.to_log_dict(), f, ensure_ascii=False, indent=2)
+
+    if result.success:
+        logger.info(f"Research complete: {len(result.final_summary)} chars")
+        return result.to_context_string()
+    else:
+        logger.warning("Research agent returned no summary, proceeding without context")
+        return ""
 
 
 def generate_script(task_id, params):
@@ -24,6 +53,8 @@ def generate_script(task_id, params):
         else:
             logger.info("generating script *without* video title context")
 
+        research_context = run_research(task_id, params)
+
         video_script = llm.generate_script(
             video_subject=params.video_subject,
             language=params.video_language,
@@ -31,6 +62,7 @@ def generate_script(task_id, params):
             video_script_prompt=params.video_script_prompt,
             custom_system_prompt=params.custom_system_prompt,
             video_title=title_to_send,
+            research_context=research_context,
         )
     else:
         logger.debug(f"video script: \n{video_script}")
@@ -80,6 +112,7 @@ def save_script_data(task_id, video_script, video_terms, params):
         "script": video_script,
         "search_terms": video_terms,
         "params": params,
+        "web_search_enabled": getattr(params, "web_search_enabled", False),
     }
 
     with open(script_file, "w", encoding="utf-8") as f:

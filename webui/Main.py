@@ -29,7 +29,7 @@ from app.models.schema import (
     VideoParams,
     VideoTransitionMode,
 )
-from app.services import llm, voice, presets
+from app.services import llm, voice, presets, research_agent
 from app.services import task as tm
 from app.utils import utils
 
@@ -97,6 +97,10 @@ _PRESET_REGISTRY: list[tuple[str, str, str | None]] = [
     ("use_custom_system_prompt",    "app", "use_custom_system_prompt"),
     ("task_folder_template",        "app", None),
     ("use_title_in_script",         "app", "use_title_in_script"),
+    # Web search
+    ("web_search_enabled",          "app", "web_search_enabled"),
+    ("web_search_prompt",           "app", "web_search_prompt"),
+    ("web_search_max_steps",        "app", "web_search_max_steps"),
     # Audio
     ("voice_volume",                "app", "voice_volume"),
     ("voice_rate",                  "app", "voice_rate"),
@@ -250,6 +254,12 @@ if "custom_system_prompt" not in st.session_state:
     st.session_state["custom_system_prompt"] = llm.DEFAULT_SCRIPT_SYSTEM_PROMPT
 if "use_custom_system_prompt" not in st.session_state:
     st.session_state["use_custom_system_prompt"] = False
+if "web_search_enabled" not in st.session_state:
+    st.session_state["web_search_enabled"] = bool(config.app.get("web_search_enabled", True))
+if "web_search_prompt" not in st.session_state:
+    st.session_state["web_search_prompt"] = config.app.get("web_search_prompt", "")
+if "web_search_max_steps" not in st.session_state:
+    st.session_state["web_search_max_steps"] = int(config.app.get("web_search_max_steps", 3))
 if "match_materials_to_script" not in st.session_state:
     st.session_state["match_materials_to_script"] = bool(
         config.app.get("match_materials_to_script", False)
@@ -1067,6 +1077,53 @@ with left_panel:
             else:
                 params.custom_system_prompt = ""
 
+        # Web検索設定
+        with st.expander(tr("Web Search Settings"), expanded=False):
+            params.web_search_enabled = st.checkbox(
+                tr("Enable Web Search"),
+                help=tr("Enable Web Search Help"),
+                key="web_search_enabled",
+            )
+
+            if params.web_search_enabled:
+                params.web_search_max_steps = st.slider(
+                    tr("Web Search Max Steps"),
+                    min_value=1,
+                    max_value=10,
+                    value=int(config.app.get("web_search_max_steps", 3)),
+                    key="web_search_max_steps",
+                )
+
+                # Search instruction presets
+                _search_presets: dict = config.app.get("web_search_presets", {}) or {}
+                preset_names = list(_search_presets.keys())
+                if preset_names:
+                    preset_cols = st.columns([2, 1])
+                    with preset_cols[0]:
+                        selected_preset = st.selectbox(
+                            tr("Web Search Preset Instructions"),
+                            options=[""] + preset_names,
+                            index=0,
+                            label_visibility="collapsed",
+                        )
+                    with preset_cols[1]:
+                        if st.button(tr("Load Search Preset"), key="load_search_preset"):
+                            if selected_preset:
+                                st.session_state["web_search_prompt"] = _search_presets[selected_preset]
+                                st.rerun()
+
+                params.web_search_prompt = st.text_area(
+                    tr("Web Search Instructions"),
+                    height=80,
+                    value=st.session_state.get("web_search_prompt", ""),
+                    max_chars=2000,
+                    placeholder=tr("Web Search Instructions Placeholder"),
+                    key="web_search_prompt",
+                ).strip()
+            else:
+                params.web_search_prompt = ""
+                params.web_search_max_steps = int(config.app.get("web_search_max_steps", 3))
+
         # 動画タイトル入力
         saved_video_title = st.session_state.get("video_title", "")
         params.video_title = st.text_input(
@@ -1079,12 +1136,33 @@ with left_panel:
             tr("Generate Video Script and Keywords"), key="auto_generate_script"
         ):
             with st.spinner(tr("Generating Video Script and Keywords")):
+                _research_context = ""
+                if getattr(params, "web_search_enabled", False):
+                    _status_placeholder = st.empty()
+                    _status_placeholder.info(tr("Researching"))
+
+                    def _ui_progress(step, total, message):
+                        _status_placeholder.info(
+                            tr("Research Step").format(step=step, total=total, message=message)
+                        )
+
+                    _result = research_agent.run_research(
+                        subject=params.video_subject,
+                        instructions=getattr(params, "web_search_prompt", ""),
+                        max_steps=getattr(params, "web_search_max_steps", 3),
+                        progress_callback=_ui_progress,
+                    )
+                    _status_placeholder.empty()
+                    if _result.success:
+                        _research_context = _result.to_context_string()
+
                 script = llm.generate_script(
                     video_subject=params.video_subject,
                     language=params.video_language,
                     paragraph_number=params.paragraph_number,
                     video_script_prompt=params.video_script_prompt,
                     custom_system_prompt=params.custom_system_prompt,
+                    research_context=_research_context,
                 )
                 if "Error: " in script:
                     st.error(tr(script))

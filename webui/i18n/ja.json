@@ -218,6 +218,21 @@
     "Select Background Video": "背景動画の選択",
     "Source Background Video": "素材ソースから背景動画を取得",
     "GPU Device (CUDA_VISIBLE_DEVICES)": "使用するGPU (CUDA_VISIBLE_DEVICES)",
-    "GPU Device Help": "使用するNVIDIA GPUデバイスIDを指定します（例: 0 や 1。複数指定は 0,1。空欄の場合はすべてのGPUを使用）"
+    "GPU Device Help": "使用するNVIDIA GPUデバイスIDを指定します（例: 0 や 1。複数指定は 0,1。空欄の場合はすべてのGPUを使用）",
+    "Web Search Settings": "Web検索設定（スクリプト生成前に情報収集）",
+    "Enable Web Search": "Web検索を有効にする",
+    "Enable Web Search Help": "有効にすると、スクリプト生成前にAIが自動的にWeb検索して情報収集します。",
+    "Web Search Instructions": "検索指示（任意）",
+    "Web Search Instructions Placeholder": "例：最新の統計データを調べる、専門家の意見を集める、事例を調査する",
+    "Web Search Max Steps": "最大検索ステップ数",
+    "Web Search Provider": "検索プロバイダー",
+    "Researching": "Web検索で情報収集中...",
+    "Research Step": "検索ステップ {step}/{total}: {message}",
+    "Web Search Preset Instructions": "検索指示プリセット",
+    "Web Search Preset Placeholder": "プリセット名",
+    "Save Search Preset": "検索指示をプリセットとして保存",
+    "Load Search Preset": "プリセットを読み込む",
+    "Search Preset Saved": "検索指示プリセットを保存しました",
+    "No Search Presets": "保存された検索指示プリセットはありません"
   }
 }

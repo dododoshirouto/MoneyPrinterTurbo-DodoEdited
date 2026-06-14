@@ -1,3 +1,4 @@
+import dataclasses
 import warnings
 from enum import Enum
 from typing import Any, List, Optional, Union
@@ -53,7 +54,7 @@ class MaterialInfo:
     provider: str = "pexels"
     url: str = ""
     duration: int = 0
-    tags: list = pydantic.dataclasses.field(default_factory=list)
+    tags: list = dataclasses.field(default_factory=list)
 
 
 class VideoParams(BaseModel):
@@ -135,6 +136,11 @@ class VideoParams(BaseModel):
     aivisspeech_base_url: Optional[str] = "http://localhost:10101"
     timezone: Optional[str] = "Asia/Tokyo"
     subtitle_offset: Optional[float] = 0.0
+
+    # Web search / research agent settings
+    web_search_enabled: bool = False
+    web_search_prompt: str = Field(default="", max_length=2000)
+    web_search_max_steps: int = Field(default=3, ge=1, le=10)
 
 
 class SubtitleRequest(BaseModel):

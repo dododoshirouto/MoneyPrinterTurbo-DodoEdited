@@ -1,4 +1,4 @@
-import json
+﻿import json
 import logging
 import re
 import requests
@@ -627,6 +627,7 @@ def build_script_prompt(
     video_script_prompt: str = "",
     custom_system_prompt: str = "",
     video_title: str = "",
+    research_context: str = "",
 ) -> str:
     paragraph_number = _normalize_script_paragraph_number(paragraph_number)
     video_script_prompt = _limit_script_text(
@@ -636,7 +637,7 @@ def build_script_prompt(
         custom_system_prompt, MAX_SCRIPT_SYSTEM_PROMPT_LENGTH, "custom_system_prompt"
     )
 
-    # 将“脚本生成规则”和“运行时上下文”分开拼接。这样高级用户即使覆盖默认
+    # 将"脚本生成规则"和"运行时上下文"分开拼接。这样高级用户即使覆盖默认
     # system prompt，也不会漏掉视频主题、语言、段落数这些每次生成都必须带上的参数。
     prompt = custom_system_prompt or DEFAULT_SCRIPT_SYSTEM_PROMPT
     prompt += f"""
@@ -648,6 +649,12 @@ def build_script_prompt(
     prompt += f"\n- number of paragraphs: {paragraph_number}"
     if language:
         prompt += f"\n- language: {language}"
+    if research_context:
+        prompt += f"""
+
+# Research Context (use this information to make the script accurate and informative):
+{research_context}
+""".rstrip()
     if video_script_prompt:
         prompt += f"""
 
@@ -665,6 +672,7 @@ def generate_script(
     video_script_prompt: str = "",
     custom_system_prompt: str = "",
     video_title: str = "",
+    research_context: str = "",
 ) -> str:
     paragraph_number = _normalize_script_paragraph_number(paragraph_number)
     video_script_prompt = _limit_script_text(
@@ -680,13 +688,15 @@ def generate_script(
         video_script_prompt=video_script_prompt,
         custom_system_prompt=custom_system_prompt,
         video_title=video_title,
+        research_context=research_context,
     )
     final_script = ""
     logger.info(
         "generating video script: "
         f"subject={video_subject}, video_title='{video_title}', paragraph_number={paragraph_number}, "
         f"has_custom_prompt={bool(video_script_prompt.strip())}, "
-        f"has_custom_system_prompt={bool(custom_system_prompt.strip())}"
+        f"has_custom_system_prompt={bool(custom_system_prompt.strip())}, "
+        f"has_research_context={bool(research_context.strip())}"
     )
 
     def format_response(response):
