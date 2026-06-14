@@ -51,6 +51,7 @@
 - **scripts.json拡張** — タスク生成時のすべてのパラメータ（テーマ・音声設定・プロンプト等）を記録
 - **ワンクリック生成** — GUIトップのテーマ入力＋ボタン1つで「Web検索→スクリプト生成→キーワード生成→動画生成」を全自動実行
 - **プリセット エクスポート/インポート** — 選択中のプリセットをJSONファイルで書き出し・読み込み（1プリセット単位での共有・バックアップに対応）
+- **YouTube Shorts 自動投稿** — 動画生成完了後にYouTubeへ自動アップロード。GCPのOAuth2認証（ブラウザで完結）、公開設定・予約投稿・LLMによるメタデータ自動生成に対応
 
 ### インフラ・パフォーマンス
 
@@ -107,9 +108,21 @@ video_codec = "h264_nvenc"
 |---|---|
 | `config.toml` | アプリ全体の設定（LLMプロバイダ・音声・エンコーダ等） |
 | `storage/presets.json` | GUIプリセット保存先 |
+| `storage/youtube_token_<nickname>.json` | YouTube OAuthトークン（「Googleでログイン」後に自動生成） |
 | `resource/fonts/` | 字幕・タイトル用フォント |
 | `resource/bg_video/` | カスタム背景動画の配置先 |
 | `resource/songs/` | BGM配置先 |
+
+### YouTube Shorts 自動投稿の設定
+
+1. [GCP Console](https://console.cloud.google.com/) でプロジェクトを作成
+2. **YouTube Data API v3** を有効化
+3. 「認証情報」→「OAuth 2.0 クライアント ID」→ **デスクトップアプリ** で作成
+4. 「承認済みのリダイレクト URI」に `http://localhost:8599` を追加
+5. GUIの「基本設定」→「YouTube API 認証情報」に **Client ID** を貼り付けて保存
+   - Client Secret は **任意**。最近のGCPはデスクトップアプリに Secret を発行しない（PKCE方式）。発行されなかった場合は空欄のままでOK
+   - `config.toml` に書き込まれる（`.gitignore` 対象なのでgitに上がらない）
+6. 以降はGUIの「Googleでログイン」ボタンを押すだけで各チャンネルを連携可能
 
 ---
 

@@ -102,6 +102,12 @@ _PRESET_REGISTRY: list[tuple[str, str, str | None]] = [
     ("web_search_enabled",          "app", "web_search_enabled"),
     ("web_search_prompt",           "app", "web_search_prompt"),
     ("web_search_max_steps",        "app", "web_search_max_steps"),
+    # YouTube
+    ("youtube_enabled",             "app", "youtube_enabled"),
+    ("youtube_selected_account",    "app", "youtube_selected_account"),
+    ("youtube_privacy",             "app", None),
+    ("youtube_schedule_hours",      "app", "youtube_schedule_hours"),
+    ("youtube_auto_metadata",       "app", "youtube_auto_metadata"),
     # Audio
     ("voice_volume",                "app", "voice_volume"),
     ("voice_rate",                  "app", "voice_rate"),
@@ -629,6 +635,23 @@ if not config.app.get("hide_config", False):
                 help=tr("GPU Device Help")
             )
             config.app["cuda_device"] = cuda_device_input.strip()
+
+            # YouTube OAuth2 認証情報（config.toml に保存 → git管理外）
+            st.write(tr("YouTube API Credentials"))
+            st.caption(tr("YouTube API Credentials Help"))
+            _yt_cid = st.text_input(
+                tr("YouTube Client ID"),
+                value=config.app.get("youtube_client_id", ""),
+                key="youtube_client_id_input",
+            )
+            config.app["youtube_client_id"] = _yt_cid.strip()
+            _yt_csecret = st.text_input(
+                tr("YouTube Client Secret"),
+                value=config.app.get("youtube_client_secret", ""),
+                key="youtube_client_secret_input",
+                type="password",
+            )
+            config.app["youtube_client_secret"] = _yt_csecret.strip()
 
 
         # 中间面板 - LLM 设置
@@ -2183,6 +2206,140 @@ with right_panel:
                     config.app["coverr_api_keys"].remove(delete_key)
                     config.save_config()
                     st.success(tr("Coverr API Key deleted successfully"))
+
+# ---------------------------------------------------------------------------
+# YouTube Shorts 自動投稿設定
+# ---------------------------------------------------------------------------
+from app.services import youtube as _yt
+
+with st.expander(tr("YouTube Settings"), expanded=False):
+    params.youtube_enabled = st.checkbox(
+        tr("Enable YouTube Upload"),
+        value=config.app.get("youtube_enabled", False),
+        key="youtube_enabled",
+    )
+    config.app["youtube_enabled"] = params.youtube_enabled
+
+    if not _yt.is_app_configured():
+        st.warning(tr("YouTube Not Configured"))
+    else:
+        st.divider()
+        # ── 連携済みアカウント一覧 ──────────────────────────────────────────
+        _yt_accounts = _yt.list_accounts()
+        st.write(tr("YouTube Accounts"))
+        if _yt_accounts:
+            for _acct in _yt_accounts:
+                _acct_cols = st.columns([3, 1])
+                _acct_cols[0].write(f"**{_acct}**")
+                if _acct_cols[1].button(tr("YouTube Disconnect"), key=f"yt_del_{_acct}"):
+                    _yt.delete_account(_acct)
+                    if config.app.get("youtube_selected_account") == _acct:
+                        config.app["youtube_selected_account"] = ""
+                    st.rerun()
+        else:
+            st.info(tr("YouTube No Accounts"))
+
+        # ── 新規アカウント追加（Googleでログイン）──────────────────────────
+        st.write(tr("YouTube Add Account"))
+        _yt_add_cols = st.columns([3, 2])
+        _yt_new_name = _yt_add_cols[0].text_input(
+            tr("YouTube Account Nickname"),
+            key="yt_new_nickname",
+            placeholder=tr("YouTube Account Nickname Placeholder"),
+            label_visibility="collapsed",
+        )
+        _yt_connect_clicked = _yt_add_cols[1].button(
+            tr("YouTube Connect"), key="yt_connect", use_container_width=True
+        )
+
+        _yt_waiting = st.session_state.get("_yt_login_waiting", False)
+
+        if _yt_connect_clicked:
+            if not _yt_new_name.strip():
+                st.error(tr("YouTube Nickname Required"))
+            else:
+                _auth_url = _yt.start_login(_yt_new_name.strip())
+                if _auth_url:
+                    st.session_state["_yt_login_waiting"] = True
+                    st.session_state["_yt_auth_url"] = _auth_url
+                    st.rerun()
+                else:
+                    _res = _yt.oauth_result()
+                    st.error(f"{tr('YouTube Auth Failed')}: {_res.get('error', '')}")
+
+        if _yt_waiting:
+            _yt_res = _yt.oauth_result()
+            if _yt_res.get("success"):
+                st.session_state.pop("_yt_login_waiting", None)
+                st.session_state.pop("_yt_auth_url", None)
+                st.success(f"{tr('YouTube Auth Complete')}: {_yt_res.get('nickname', '')}")
+                st.rerun()
+            elif _yt_res.get("error"):
+                st.session_state.pop("_yt_login_waiting", None)
+                st.session_state.pop("_yt_auth_url", None)
+                st.error(f"{tr('YouTube Auth Failed')}: {_yt_res['error']}")
+            else:
+                _yt_saved_url = st.session_state.get("_yt_auth_url", "")
+                if _yt_saved_url:
+                    st.link_button(tr("YouTube Auth URL"), _yt_saved_url, use_container_width=True)
+                st.info(tr("YouTube Login Waiting"))
+                _yt_btn_cols = st.columns([1, 1])
+                if _yt_btn_cols[0].button(tr("YouTube Auth Check"), key="yt_auth_check"):
+                    st.rerun()
+                if _yt_btn_cols[1].button(tr("Cancel"), key="yt_auth_cancel"):
+                    st.session_state.pop("_yt_login_waiting", None)
+                    st.session_state.pop("_yt_auth_url", None)
+                    st.rerun()
+
+        # ── 投稿設定 ────────────────────────────────────────────────────────
+        if _yt_accounts and params.youtube_enabled:
+            st.divider()
+
+            _yt_saved_acct = config.app.get("youtube_selected_account", "")
+            _yt_acct_idx = _yt_accounts.index(_yt_saved_acct) if _yt_saved_acct in _yt_accounts else 0
+            _yt_selected = st.selectbox(
+                tr("YouTube Selected Account"),
+                options=_yt_accounts,
+                index=_yt_acct_idx,
+                key="youtube_selected_account",
+            )
+            params.youtube_selected_account = _yt_selected
+            config.app["youtube_selected_account"] = _yt_selected
+
+            _yt_settings_cols = st.columns([1, 1])
+            with _yt_settings_cols[0]:
+                _yt_privacy_options = ["private", "unlisted", "public"]
+                _yt_privacy_labels = [tr("YouTube Private"), tr("YouTube Unlisted"), tr("YouTube Public")]
+                _yt_current_privacy = config.app.get("youtube_privacy", "private")
+                _yt_privacy_idx = _yt_privacy_options.index(_yt_current_privacy) if _yt_current_privacy in _yt_privacy_options else 0
+                _yt_privacy = st.selectbox(
+                    tr("YouTube Privacy"),
+                    options=_yt_privacy_labels,
+                    index=_yt_privacy_idx,
+                    key="youtube_privacy_select",
+                )
+                params.youtube_privacy = _yt_privacy_options[_yt_privacy_labels.index(_yt_privacy)]
+                config.app["youtube_privacy"] = params.youtube_privacy
+
+            with _yt_settings_cols[1]:
+                params.youtube_schedule_hours = st.number_input(
+                    tr("YouTube Schedule Hours"),
+                    min_value=0,
+                    max_value=8760,
+                    value=int(config.app.get("youtube_schedule_hours", 0)),
+                    step=1,
+                    key="youtube_schedule_hours",
+                    help=tr("YouTube Schedule Hours Help"),
+                )
+                config.app["youtube_schedule_hours"] = params.youtube_schedule_hours
+
+            params.youtube_auto_metadata = st.checkbox(
+                tr("YouTube Auto Metadata"),
+                value=config.app.get("youtube_auto_metadata", True),
+                key="youtube_auto_metadata",
+                help=tr("YouTube Auto Metadata Help"),
+            )
+            config.app["youtube_auto_metadata"] = params.youtube_auto_metadata
 
 start_button = st.button(tr("Generate Video"), use_container_width=True, type="primary")
 _one_click_fire = st.session_state.pop("_one_click_pending", False)

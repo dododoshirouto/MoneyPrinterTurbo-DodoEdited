@@ -2,7 +2,7 @@ x-common-volumes: &common-volumes
   - ./:/MoneyPrinterTurbo
 
 x-common-env: &common-env
-  IMAGEIO_FFMPEG_EXE: /usr/bin/ffmpeg
+  IMAGEIO_FFMPEG_EXE: /usr/local/bin/ffmpeg
 
 x-gpu-device: &gpu-device
   deploy:
@@ -22,6 +22,7 @@ services:
     runtime: nvidia
     ports:
       - "127.0.0.1:8501:8501"
+      - "127.0.0.1:8599:8599"
     command: [ "streamlit", "run", "./webui/Main.py","--browser.serverAddress=127.0.0.1","--server.enableCORS=True","--browser.gatherUsageStats=False" ]
     environment: *common-env
     volumes: *common-volumes

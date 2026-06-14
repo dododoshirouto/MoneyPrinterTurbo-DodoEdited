@@ -1,3 +1,4 @@
+import datetime
 import json
 import math
 import os.path
@@ -476,7 +477,60 @@ def start(task_id, params: VideoParams, stop_at: str = "video"):
         f"task {task_id} finished, generated {len(final_video_paths)} videos."
     )
 
-    # 7. Cross-post to TikTok/Instagram (if enabled)
+    # 7. Upload to YouTube Shorts (if enabled)
+    youtube_results = []
+    if getattr(params, "youtube_enabled", False):
+        from app.services import youtube as yt_service
+        yt_account = getattr(params, "youtube_selected_account", "") or ""
+        if not yt_account or not yt_service.is_authenticated(yt_account):
+            logger.warning(f"YouTube upload enabled but account '{yt_account}' not authenticated; skipping")
+        else:
+            logger.info("\n\n## uploading to YouTube Shorts")
+            # Generate metadata if requested
+            yt_title = params.video_subject or "Short Video"
+            yt_description = ""
+            yt_tags: list[str] = ["Shorts"]
+            if getattr(params, "youtube_auto_metadata", True):
+                try:
+                    lang = params.video_language or "ja"
+                    meta = llm.generate_social_metadata(
+                        video_subject=params.video_subject,
+                        video_script=video_script,
+                        language=lang,
+                        platform="youtube",
+                    )
+                    yt_title = meta.get("title", yt_title)[:100]
+                    yt_description = meta.get("caption", "")
+                    raw_tags = meta.get("hashtags", [])
+                    yt_tags = [t.lstrip("#") for t in raw_tags] + ["Shorts"]
+                except Exception as _e:
+                    logger.warning(f"YouTube metadata generation failed: {_e}")
+
+            # Calculate scheduled publish time (UTC)
+            schedule_hours = getattr(params, "youtube_schedule_hours", 0)
+            publish_at = None
+            if schedule_hours > 0:
+                publish_at = datetime.datetime.utcnow() + datetime.timedelta(hours=schedule_hours)
+
+            privacy = getattr(params, "youtube_privacy", "private") or "private"
+
+            for video_path in final_video_paths:
+                result = yt_service.upload_video(
+                    video_path=video_path,
+                    title=yt_title,
+                    description=yt_description,
+                    tags=yt_tags,
+                    account=yt_account,
+                    privacy=privacy,
+                    publish_at=publish_at,
+                )
+                youtube_results.append(result)
+                if result.get("success"):
+                    logger.info(f"YouTube uploaded: {result.get('url')}")
+                else:
+                    logger.warning(f"YouTube upload failed: {result.get('error')}")
+
+    # 8. Cross-post to TikTok/Instagram (if enabled)
     cross_post_results = []
     if upload_post.upload_post_service.is_configured() and upload_post.upload_post_service.auto_upload:
         logger.info("\n\n## cross-posting videos to TikTok/Instagram")
@@ -501,6 +555,7 @@ def start(task_id, params: VideoParams, stop_at: str = "video"):
         "subtitle_path": subtitle_path,
         "materials": downloaded_videos,
         "cross_post_results": cross_post_results if cross_post_results else None,
+        "youtube_results": youtube_results if youtube_results else None,
     }
     sm.state.update_task(
         task_id, state=const.TASK_STATE_COMPLETE, progress=100, **kwargs

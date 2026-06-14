@@ -142,6 +142,13 @@ class VideoParams(BaseModel):
     web_search_prompt: str = Field(default="", max_length=2000)
     web_search_max_steps: int = Field(default=3, ge=1, le=10)
 
+    # YouTube Shorts auto-upload settings
+    youtube_enabled: bool = False
+    youtube_selected_account: Optional[str] = ""
+    youtube_privacy: Optional[str] = "private"
+    youtube_schedule_hours: int = Field(default=0, ge=0, le=8760)
+    youtube_auto_metadata: bool = True
+
 
 class SubtitleRequest(BaseModel):
     video_script: str
