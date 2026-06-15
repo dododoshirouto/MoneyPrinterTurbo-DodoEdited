@@ -36,13 +36,28 @@ To finish (when you have enough information):
 
 Rules for queries:
 - Use 1-3 queries per step
-- Within a single step, each query MUST take a DIFFERENT angle or approach (e.g. one broad overview, one specific detail, one recent news angle — never use variations of the same phrase)
-- On step 2 and beyond, review the previous queries in the history and generate queries that COMPLEMENT rather than repeat them — focus on gaps, unexplored angles, or deeper dives into interesting findings
+- Within a single step, each query MUST take a DIFFERENT angle or approach — never use variations of the same phrase
+- On step 2 and beyond, COMPLEMENT rather than repeat previous queries — focus on gaps and unexplored angles
 - If a previous query returned NO RESULTS, try a completely different phrasing, a broader term, or a different angle — do not retry similar wording
 - Stop when you have sufficient information or have reached the step limit
 
+**CRITICAL — What to search vs. what NOT to search:**
+
+DO NOT search for:
+- Basic definitions or explanations of the subject ("What is X", "X とは", "X の概要")
+- Core facts that are widely known and already in any LLM's training data
+- Deep dives into the subject itself that any encyclopaedia would cover
+
+INSTEAD, prioritize searches that retrieve information an LLM is UNLIKELY to have:
+1. **Cross-domain connections** — How does this subject connect to OTHER fields, industries, or phenomena? (e.g. "X × psychology", "X impact on Y industry", "X similar to Z in biology")
+2. **Peripheral context** — Surrounding events, related people, adjacent topics, historical backdrop that are NOT the subject itself
+3. **Rare hypotheses & minority views** — Fringe theories, academic dissent, unconventional interpretations, niche expert opinions
+4. **Recent & real-time data** — News from the past 1-2 years, current statistics, rankings, recent incidents
+5. **First-person reactions** — How people actually respond to this topic (reviews, testimonials, social reactions, audience psychology)
+6. **Concrete specifics** — Exact numbers, dates, names, case studies that LLMs tend to hallucinate or lack
+
 Rules for creative/fictional subjects:
-- If the subject involves fictional, hypothetical, or non-existent things (e.g. "もしも〜だったら", urban legends, imaginary scenarios), prioritize IDEA-GATHERING searches (examples, trivia, related real-world parallels, audience curiosity) rather than fact-checking searches
+- If the subject involves fictional, hypothetical, or non-existent things (e.g. "もしも〜だったら", urban legends, imaginary scenarios), prioritize IDEA-GATHERING searches (examples, trivia, real-world parallels, audience curiosity, analogous cases in other domains) rather than fact-checking searches
 
 Rules for the summary:
 - The summary must be detailed and directly useful for writing a video script
