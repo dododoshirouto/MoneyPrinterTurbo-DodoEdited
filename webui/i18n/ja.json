@@ -270,6 +270,10 @@
     "YouTube Public": "公開",
     "YouTube Schedule Hours": "予約投稿（今から何時間後、0=即時）",
     "YouTube Schedule Hours Help": "0で即時投稿。N時間後に予約する場合はNを入力（公開または限定公開設定が必要）。",
+    "YouTube Schedule Mode": "予約の基準時刻",
+    "YouTube Schedule From Now": "今から",
+    "YouTube Schedule From Last Upload": "最終公開動画から",
+    "YouTube Schedule Mode Help": "「今から」＝アップロード時刻 + N時間後。「最終公開動画から」＝チャンネル上の直近公開動画の公開日時 + N時間後（定期投稿に最適）。",
     "YouTube Auto Metadata": "タイトル・説明文・ハッシュタグをAIで自動生成",
     "YouTube Auto Metadata Help": "動画スクリプトをもとにYouTube向けのタイトル・説明文・ハッシュタグをLLMで自動生成します。"
   }

@@ -225,6 +225,10 @@
     "YouTube Public": "Public",
     "YouTube Schedule Hours": "Schedule (hours from now, 0 = immediate)",
     "YouTube Schedule Hours Help": "Set to 0 to publish immediately. Set to N to schedule N hours from now (requires public/unlisted).",
+    "YouTube Schedule Mode": "Schedule base time",
+    "YouTube Schedule From Now": "From now",
+    "YouTube Schedule From Last Upload": "From last public video",
+    "YouTube Schedule Mode Help": "'From now' = upload time + N hours. 'From last public video' = last public video's publish time + N hours (ideal for consistent posting schedules).",
     "YouTube Auto Metadata": "Auto-generate title, description, hashtags",
     "YouTube Auto Metadata Help": "Uses AI to generate YouTube-optimized title, description, and hashtags from the video script."
   }

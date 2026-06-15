@@ -147,6 +147,7 @@ class VideoParams(BaseModel):
     youtube_selected_account: Optional[str] = ""
     youtube_privacy: Optional[str] = "private"
     youtube_schedule_hours: int = Field(default=0, ge=0, le=8760)
+    youtube_schedule_mode: str = "from_now"  # "from_now" | "from_last_upload"
     youtube_auto_metadata: bool = True
 
 

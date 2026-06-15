@@ -508,9 +508,21 @@ def start(task_id, params: VideoParams, stop_at: str = "video"):
 
             # Calculate scheduled publish time (UTC)
             schedule_hours = getattr(params, "youtube_schedule_hours", 0)
+            schedule_mode = getattr(params, "youtube_schedule_mode", "from_now")
             publish_at = None
             if schedule_hours > 0:
-                publish_at = datetime.datetime.utcnow() + datetime.timedelta(hours=schedule_hours)
+                if schedule_mode == "from_last_upload":
+                    base_time = yt_service.get_last_public_video_time(yt_account)
+                    if base_time is None:
+                        logger.warning("YouTube: could not fetch last public video time; falling back to 'from_now'")
+                        base_time = datetime.datetime.now(datetime.timezone.utc)
+                    publish_at = base_time + datetime.timedelta(hours=schedule_hours)
+                    # If the computed time is already in the past, shift to from_now
+                    if publish_at <= datetime.datetime.now(datetime.timezone.utc):
+                        logger.warning("YouTube: computed publish_at is in the past; shifting to from_now")
+                        publish_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=schedule_hours)
+                else:
+                    publish_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=schedule_hours)
 
             privacy = getattr(params, "youtube_privacy", "private") or "private"
 

@@ -368,6 +368,59 @@ def oauth_result() -> dict:
 # Channel info
 # ---------------------------------------------------------------------------
 
+def get_last_public_video_time(nickname: str) -> Optional[datetime.datetime]:
+    """
+    Return the publishedAt time (UTC) of the most recent PUBLIC video on the channel.
+    Returns None if no public video is found or on error.
+    """
+    try:
+        from googleapiclient.discovery import build
+    except ImportError:
+        return None
+    creds = _load_credentials(nickname)
+    if not creds:
+        return None
+    try:
+        yt = build("youtube", "v3", credentials=creds)
+        # Get uploads playlist ID
+        ch_resp = yt.channels().list(part="contentDetails", mine=True).execute()
+        items = ch_resp.get("items", [])
+        if not items:
+            return None
+        uploads_playlist = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+
+        # Walk the playlist until we find a public video
+        next_page = None
+        for _ in range(5):  # check up to 5 pages (25 videos)
+            pl_resp = yt.playlistItems().list(
+                part="contentDetails",
+                playlistId=uploads_playlist,
+                maxResults=5,
+                pageToken=next_page,
+            ).execute()
+            video_ids = [i["contentDetails"]["videoId"] for i in pl_resp.get("items", [])]
+            if not video_ids:
+                break
+            # Batch-fetch status + snippet
+            v_resp = yt.videos().list(
+                part="status,snippet",
+                id=",".join(video_ids),
+            ).execute()
+            for v in v_resp.get("items", []):
+                if v.get("status", {}).get("privacyStatus") == "public":
+                    published = v["snippet"]["publishedAt"]  # "2024-01-01T12:00:00Z"
+                    return datetime.datetime.strptime(published, "%Y-%m-%dT%H:%M:%SZ").replace(
+                        tzinfo=datetime.timezone.utc
+                    )
+            next_page = pl_resp.get("nextPageToken")
+            if not next_page:
+                break
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to fetch last public video time ({nickname}): {e}")
+        return None
+
+
 def get_channel_name(nickname: str) -> str:
     try:
         from googleapiclient.discovery import build

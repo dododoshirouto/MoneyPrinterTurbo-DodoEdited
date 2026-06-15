@@ -107,6 +107,7 @@ _PRESET_REGISTRY: list[tuple[str, str, str | None]] = [
     ("youtube_selected_account",    "app", "youtube_selected_account"),
     ("youtube_privacy",             "app", None),
     ("youtube_schedule_hours",      "app", "youtube_schedule_hours"),
+    ("youtube_schedule_mode",       "app", "youtube_schedule_mode"),
     ("youtube_auto_metadata",       "app", "youtube_auto_metadata"),
     # Audio
     ("voice_volume",                "app", "voice_volume"),
@@ -2337,6 +2338,25 @@ with st.expander(tr("YouTube Settings"), expanded=False, key="exp_youtube_settin
                     help=tr("YouTube Schedule Hours Help"),
                 )
                 config.app["youtube_schedule_hours"] = params.youtube_schedule_hours
+
+            if params.youtube_schedule_hours > 0:
+                _yt_mode_options = ["from_now", "from_last_upload"]
+                _yt_mode_labels = [tr("YouTube Schedule From Now"), tr("YouTube Schedule From Last Upload")]
+                _yt_current_mode = config.app.get("youtube_schedule_mode", "from_now")
+                _yt_mode_idx = _yt_mode_options.index(_yt_current_mode) if _yt_current_mode in _yt_mode_options else 0
+                _yt_mode = st.radio(
+                    tr("YouTube Schedule Mode"),
+                    options=_yt_mode_labels,
+                    index=_yt_mode_idx,
+                    key="youtube_schedule_mode_radio",
+                    help=tr("YouTube Schedule Mode Help"),
+                    horizontal=True,
+                )
+                params.youtube_schedule_mode = _yt_mode_options[_yt_mode_labels.index(_yt_mode)]
+                config.app["youtube_schedule_mode"] = params.youtube_schedule_mode
+            else:
+                params.youtube_schedule_mode = "from_now"
+                config.app["youtube_schedule_mode"] = "from_now"
 
             params.youtube_auto_metadata = st.checkbox(
                 tr("YouTube Auto Metadata"),
