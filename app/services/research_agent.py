@@ -34,10 +34,17 @@ To search:
 To finish (when you have enough information):
 {"action": "done", "summary": "...comprehensive research summary in the same language as the video subject..."}
 
-Rules:
+Rules for queries:
 - Use 1-3 queries per step
-- Queries should be specific and targeted
+- Within a single step, each query MUST take a DIFFERENT angle or approach (e.g. one broad overview, one specific detail, one recent news angle — never use variations of the same phrase)
+- On step 2 and beyond, review the previous queries in the history and generate queries that COMPLEMENT rather than repeat them — focus on gaps, unexplored angles, or deeper dives into interesting findings
+- If a previous query returned NO RESULTS, try a completely different phrasing, a broader term, or a different angle — do not retry similar wording
 - Stop when you have sufficient information or have reached the step limit
+
+Rules for creative/fictional subjects:
+- If the subject involves fictional, hypothetical, or non-existent things (e.g. "もしも〜だったら", urban legends, imaginary scenarios), prioritize IDEA-GATHERING searches (examples, trivia, related real-world parallels, audience curiosity) rather than fact-checking searches
+
+Rules for the summary:
 - The summary must be detailed and directly useful for writing a video script
 - Write the summary in the same language as the video subject
 """
@@ -107,12 +114,32 @@ def _call_orchestrator(
     """Ask the orchestrator LLM what to do next. Returns parsed JSON action."""
     history_text = ""
     for step in history:
-        history_text += f"\n\n## Step {step.step} searches: {step.queries}\n"
+        # Mark which queries returned no results so the orchestrator can avoid re-trying them
+        query_labels = []
+        for item in step.raw_results:
+            has_results = bool(item.get("results"))
+            label = f'"{item["query"]}"' + ("" if has_results else " [NO RESULTS]")
+            query_labels.append(label)
+        history_text += f"\n\n## Step {step.step} queries: {', '.join(query_labels)}\n"
         history_text += f"Summary: {step.worker_summary}"
+
+    # Build a flat list of all queries used so far (to help avoid repetition)
+    all_past_queries = [
+        item["query"]
+        for step in history
+        for item in step.raw_results
+    ]
+    past_queries_text = (
+        "\n".join(f"- {q}" for q in all_past_queries)
+        if all_past_queries else "(none)"
+    )
 
     user_message = f"""Video subject: {subject}
 
 Research instructions: {instructions if instructions else "Gather comprehensive background information relevant to this subject."}
+
+All queries used so far (DO NOT repeat these — generate queries from different angles):
+{past_queries_text}
 
 Search history so far:{history_text if history_text else " (none yet)"}
 
